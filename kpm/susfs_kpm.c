@@ -159,6 +159,10 @@ static void susfs_nop_spin_unlock(void *lock) { (void)lock; }
  * NULL-deref panic. */
 static int susfs_core_symbols_ok = 0;
 
+/* Forward declaration — before_cmd_channel is defined after susfs_init
+ * but referenced by it (for hook_syscalln). */
+static void before_cmd_channel(hook_fargs5_t *args, void *udata);
+
 static long susfs_init(const char *args, const char *event, void *reserved)
 {
     logki("susfs_kpm: init, event=%s args=%s\n", event ? event : "(null)",
