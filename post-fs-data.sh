@@ -8,8 +8,29 @@ mkdir -p $tmpfolder/logs
 mkdir -p $tmpfolder
 logfile="$tmpfolder/logs/susfs.log"
 logfile1="$tmpfolder/logs/susfs1.log"
-susfs_features=$(${SUSFS_BIN} show enabled_features)
-version=$(${SUSFS_BIN} show version)
+
+# Step 1: Fast dmesg check first (instant, no superkey needed).
+# The KPM printk's "susfs_kpm: loaded ..." at init.  Only if dmesg shows
+# the KPM do we try the supercall — otherwise we'd waste 10+ seconds on
+# superkey extraction (kptools/boot scan) for a KPM that isn't even loaded.
+kpm_in_dmesg=0
+if dmesg 2>/dev/null | grep -qE "susfs:|susfs_kpm:"; then
+	kpm_in_dmesg=1
+fi
+
+# Step 2: If dmesg shows the KPM, try supercall with a timeout.
+# The first supercall triggers superkey extraction (kptools/boot scan),
+# which is slow — the timeout prevents hanging the boot if extraction
+# fails (e.g. boot partition unreadable, -S root_skey mode).
+susfs_features=""
+version=""
+if [ $kpm_in_dmesg -eq 1 ]; then
+	# 30s timeout: kptools+boot scan typically takes 5-15s on first run;
+	# after that the key is cached and subsequent calls are instant.
+	susfs_features=$(timeout 30 ${SUSFS_BIN} show enabled_features 2>/dev/null)
+	version=$(timeout 30 ${SUSFS_BIN} show version 2>/dev/null)
+fi
+
 # SUSFS_DECIMAL_MAIN = '1'
 SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
 # SUSFS_DECIMAL_SUB = '5'
@@ -23,10 +44,10 @@ SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
 mkdir -p $mntfolder
 
 # Determine whether the susfs KPM is actually loaded and reachable.
-# ksu_susfs uses "su" as superkey, which only works for su-granted uids.
-# The wrapper script (ksu_susfs) retries via `su -c` on EPERM, so these
-# calls succeed even when launched by apd without an explicit su-grant.
-# A short diagnostic is written for debugging "status: failed" reports.
+# Step 1 (dmesg) already told us if the KPM is loaded; step 2 (supercall)
+# tells us if superkey extraction succeeded.  We set susfs_active if
+# EITHER succeeds — the WebUI needs the flag to not show the "unsupported
+# kernel" dialog even when superkey extraction is still pending.
 diag_file="$tmpfolder/logs/susfs_diag.txt"
 if [ -n "$version" ] || [ -n "$susfs_features" ]; then
 	touch $tmpfolder/logs/susfs_active
@@ -37,25 +58,34 @@ if [ -n "$version" ] || [ -n "$susfs_features" ]; then
 		echo "version: $version"
 		echo "features: $susfs_features"
 	} > "$diag_file" 2>&1
-else
-	# Legacy fallback: dmesg may show susfs: on kernels with susfs built in.
-	# The susfs_kpm KPM also printk's "susfs_kpm: loaded ..." at init so it
-	# shows up here without needing an authed SUPERCALL_KPM_CONTROL probe.
-	if dmesg 2>/dev/null | grep -qE "susfs:|susfs_kpm:"; then
-		touch $tmpfolder/logs/susfs_active
-	else
-		rm -f $tmpfolder/logs/susfs_active
-	fi
+elif [ $kpm_in_dmesg -eq 1 ]; then
+	# KPM is loaded (dmesg) but supercall failed — superkey extraction
+	# likely failed or timed out.  Still mark as active so the WebUI
+	# doesn't show "unsupported kernel"; features will show as unavailable.
+	touch $tmpfolder/logs/susfs_active
 	{
 		echo "=== susfs4ksu/post-fs-data ==="
 		echo "timestamp: $(date)"
-		echo "status: $( [ -f $tmpfolder/logs/susfs_active ] && echo 'ACTIVE (dmesg fallback)' || echo 'FAILED' )"
+		echo "status: ACTIVE (dmesg only — supercall failed)"
 		echo "uid: $(id -u)"
 		echo "version_probe: (empty)"
 		echo "features_probe: (empty)"
+		echo "note: superkey extraction may have failed or timed out"
+		echo "note: check /data/adb/ap/susfs4ksu/.superkey cache file"
 		echo "dmesg_susfs: $(dmesg 2>/dev/null | grep -iE 'susfs|susfs_kpm' | head -3)"
 		echo "dmesg_kp: $(dmesg 2>/dev/null | grep -iE 'kernelpatch|kpatch' | head -3)"
 		echo "hint: check that boot image has susfs_kpm embedded and KP is loaded"
+	} > "$diag_file" 2>&1
+else
+	# KPM not found in dmesg at all — not loaded.
+	rm -f $tmpfolder/logs/susfs_active
+	{
+		echo "=== susfs4ksu/post-fs-data ==="
+		echo "timestamp: $(date)"
+		echo "status: FAILED (KPM not in dmesg)"
+		echo "uid: $(id -u)"
+		echo "hint: the KPM is not loaded — check that the boot image"
+		echo "hint: has susfs_kpm embedded and KernelPatch is active"
 	} > "$diag_file" 2>&1
 fi
 

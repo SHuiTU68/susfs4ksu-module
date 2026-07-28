@@ -55,6 +55,7 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 /* Mirror of KernelPatch/kernel/patch/include/uapi/scdefs.h (subset) */
 #define __NR_supercall          45
@@ -237,13 +238,22 @@ static inline int _try_key_from_boot_scan(char *out, size_t outlen)
     return found;
 }
 
+/* Path to the superkey cache file.  Once the key is extracted (via kptools
+ * or boot scan — both are slow), it's cached here so subsequent calls are
+ * instant.  The file is root-readable only and lives in APatch's data dir. */
+#define SUPERKEY_CACHE_PATH "/data/adb/ap/susfs4ksu/.superkey"
+
 /* Auto-detect the superkey using multiple extraction strategies.
  *
  * Tries, in order:
+ *   0. Cache file (instant — avoids re-running kptools/boot scan)
  *   1. kptools -l on the active boot partition
  *   2. Raw scan of the boot partition for KP_MAGIC + superkey offset
  *   3. apd cmdline (only works during early boot stages)
  *   4. Fallback to "su" (works only when no superkey has been preset)
+ *
+ * On successful extraction (strategies 1-3), the key is cached to
+ * SUPERKEY_CACHE_PATH so subsequent calls skip the slow extraction.
  *
  * Returns a pointer to a static buffer containing the key. */
 static inline const char *get_supercall_key(void)
@@ -256,24 +266,52 @@ static inline const char *get_supercall_key(void)
     /* Default fallback */
     strcpy(key_buf, "su");
 
+    /* Strategy 0: read from cache file (instant) */
+    int fd = open(SUPERKEY_CACHE_PATH, O_RDONLY);
+    if (fd >= 0) {
+        ssize_t n = read(fd, key_buf, sizeof(key_buf) - 1);
+        close(fd);
+        if (n > 0) {
+            key_buf[n] = '\0';
+            /* Trim trailing whitespace */
+            key_buf[strcspn(key_buf, "\r\n")] = '\0';
+            if (key_buf[0]) return key_buf;
+        }
+        /* Cache read failed or empty — fall through to extraction */
+        strcpy(key_buf, "su");
+    }
+
+    /* Try extraction strategies; cache on success */
+    const char *cache_val = NULL;
+
     /* Strategy 1: kptools (most reliable, but requires the binary) */
-    if (_try_key_from_kptools(key_buf, sizeof(key_buf)) == 0)
-        return key_buf;
+    if (_try_key_from_kptools(key_buf, sizeof(key_buf)) == 0) {
+        cache_val = key_buf;
+    } else {
+        strcpy(key_buf, "su");
+        /* Strategy 2: scan boot partition for KP magic */
+        if (_try_key_from_boot_scan(key_buf, sizeof(key_buf)) == 0) {
+            cache_val = key_buf;
+        } else {
+            strcpy(key_buf, "su");
+            /* Strategy 3: apd cmdline (only works during boot stages) */
+            if (_try_key_from_apd_cmdline(key_buf, sizeof(key_buf)) == 0) {
+                cache_val = key_buf;
+            }
+        }
+    }
 
-    /* Reset to "su" in case kptools partially wrote */
-    strcpy(key_buf, "su");
+    /* Cache the extracted key for next time (only if not "su" fallback) */
+    if (cache_val && strcmp(cache_val, "su") != 0) {
+        /* Ensure parent dir exists (best-effort) */
+        mkdir("/data/adb/ap/susfs4ksu", 0755);
+        fd = open(SUPERKEY_CACHE_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd >= 0) {
+            write(fd, cache_val, strlen(cache_val));
+            close(fd);
+        }
+    }
 
-    /* Strategy 2: scan boot partition for KP magic */
-    if (_try_key_from_boot_scan(key_buf, sizeof(key_buf)) == 0)
-        return key_buf;
-
-    strcpy(key_buf, "su");
-
-    /* Strategy 3: apd cmdline (only works during boot stages) */
-    if (_try_key_from_apd_cmdline(key_buf, sizeof(key_buf)) == 0)
-        return key_buf;
-
-    /* Strategy 4: fallback to "su" (already in key_buf) */
     return key_buf;
 }
 

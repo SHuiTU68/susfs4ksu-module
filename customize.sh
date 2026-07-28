@@ -104,28 +104,19 @@ chmod 755 ${DEST_BIN_DIR}/ksu_susfs
 # KernelPatch at boot via the extra_item mechanism — this module does NOT
 # install or load it.
 #
-# Why we don't do a hard check here:
-#   - `apd` has NO kpm subcommand (its CLI only manages APM modules; KPM
-#     load/list/control is exposed via the APP's JNI, not apd CLI).
-#   - `ksu_susfs show version` calls sc_kpm_control(key, ...) which requires
-#     is_authed — only obtainable via the real superkey (auto-detected from
-#     apd's cmdline) or the trusted-manager UID.  During install apd may not
-#     be running yet, so the probe is unreliable.
-#   - dmesg WILL show "susfs_kpm: loaded ..." (the KPM printk's at init),
-#     but we avoid depending on it during install since the KPM may not have
-#     loaded yet if the boot image was just patched.
+# IMPORTANT: we must NOT call `ksu_susfs show version` here!  The superkey
+# extraction (kptools / boot partition scan) is slow (can take 10+ seconds)
+# and will hang the module install UI.  Instead we check dmesg for the
+# KPM's init printk line, which is instant and safe.
 #
-# So any probe here is unreliable. The authoritative status is computed
-# after boot by post-fs-data.sh (which sets susfs_active) and reflected in
-# the WebUI by boot-completed.sh. We only try the end-to-end probe as a
-# convenience and never treat failure as an error.
-ui_print "[-] Probing susfs_kpm (advisory — install-time probe is unreliable)"
-SUSFS_VERSION_RAW="$(${DEST_BIN_DIR}/ksu_susfs show version 2>/dev/null)"
-if [ -n "$SUSFS_VERSION_RAW" ] 2>/dev/null; then
-	ui_print "[-] susfs_kpm active, version: $SUSFS_VERSION_RAW"
+# The authoritative status is computed after boot by post-fs-data.sh (which
+# sets susfs_active) and reflected in the WebUI by boot-completed.sh.
+ui_print "[-] Checking susfs_kpm via dmesg (instant, no superkey needed)"
+if dmesg 2>/dev/null | grep -q "susfs_kpm: loaded"; then
+	ui_print "[-] susfs_kpm is loaded (detected via dmesg printk)"
 else
-	ui_print "[-] KPM not reachable now — reboot to activate; status will be"
-	ui_print "[-] shown in WebUI after boot (post-fs-data.sh sets susfs_active)"
+	ui_print "[-] susfs_kpm not found in dmesg — reboot to activate if just patched"
+	ui_print "[-] Status will be shown in WebUI after boot"
 fi
 
 # set permissions

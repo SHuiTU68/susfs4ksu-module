@@ -7,8 +7,10 @@ PERSISTENT_DIR=/data/adb/susfs4ksu
 tmpfolder=/data/adb/ap/susfs4ksu
 logfile="$tmpfolder/logs/susfs.log"
 logfile1="$tmpfolder/logs/susfs1.log"
-version=$(${SUSFS_BIN} show version)
-susfs_features=$(${SUSFS_BIN} show enabled_features)
+# Use timeout in case superkey cache from post-fs-data is missing/invalid
+# and re-extraction (kptools/boot scan) is needed — prevents hanging boot.
+version=$(timeout 30 ${SUSFS_BIN} show version 2>/dev/null)
+susfs_features=$(timeout 30 ${SUSFS_BIN} show enabled_features 2>/dev/null)
 # SUSFS_DECIMAL_MAIN = '1'
 SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
 # SUSFS_DECIMAL_SUB = '5'
