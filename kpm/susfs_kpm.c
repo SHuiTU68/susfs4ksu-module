@@ -253,14 +253,25 @@ static long susfs_init(const char *args, const char *event, void *reserved)
 
     /* Resolve printk so we can write to the regular kernel log buffer
      * (dmesg).  logki/log_boot only reach KernelPatch's internal boot log,
-     * which userspace cannot read without an authed SUPERCALL_BOOTLOG —
-     * and the ksu_susfs CLI can't auth for KPM_CONTROL either (it passes
-     * "su" as the superkey, which doesn't match the real preset superkey).
-     * By printk-ing "susfs_kpm: loaded ..." at init, the module's
-     * post-fs-data.sh / boot-completed.sh can detect the KPM via
-     * `dmesg | grep susfs_kpm` without any supercall.  Try the bare name,
-     * the .cfi_jt CFI jump-table variant, and the _printk rename used on
-     * kernels that reworked the printk export. */
+     * which userspace cannot read without an authed SUPERCALL_BOOTLOG.
+     *
+     * The ksu_susfs CLI also cannot reach SUPERCALL_KPM_CONTROL: in KP's
+     * supercall dispatch (kernel/patch/common/supercall.c) KPM_CONTROL sits
+     * behind `if (!is_authed) return -EPERM;`.  is_authed is granted only
+     * by (a) a correct superkey via auth_superkey(), or (b) being the
+     * trusted manager UID (APK signature SHA256 match in userd.c).  ksu_susfs
+     * is neither — it's a third-party binary (no APK signature match) and
+     * passes "su" as the key, which has no special meaning in this dispatch
+     * path (the "su" string is only special-cased in handle_supercmd() for
+     * the /system/bin/kp su-shell route).  SU-allowed UIDs only get
+     * is_trusted_caller=1, not is_authed, so they pass SUPERCALL_SU but are
+     * blocked at the KPM_CONTROL gate.  Hence dmesg is the only reliable
+     * userspace channel.
+     *
+     * By printk-ing "susfs_kpm: loaded ..." at init, post-fs-data.sh /
+     * boot-completed.sh detect the KPM via `dmesg | grep susfs_kpm` without
+     * any supercall.  Try the bare name, the .cfi_jt CFI jump-table variant,
+     * and the _printk rename used on kernels that reworked the printk export. */
     susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("printk");
     if (!susfs_printk)
         susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("printk.cfi_jt");

@@ -34,11 +34,17 @@ emulate_vold_app_data=0
 [ -f $PERSISTENT_DIR/config.sh ] && . $PERSISTENT_DIR/config.sh
 
 # update description
-# The KPM printk's "susfs_kpm: loaded ..." at init so dmesg carries it
-# even when the ksu_susfs CLI can't reach SUPERCALL_KPM_CONTROL (it auths
-# with "su" which doesn't match the real preset superkey, so KPM_CONTROL
-# returns -EPERM for any non-APatch-app uid).  Grep both the legacy
-# "susfs:" tag (built-in susfs) and "susfs_kpm:" (the KPM printk line).
+# The KPM printk's "susfs_kpm: loaded ..." at init so dmesg carries it.
+# ksu_susfs CLI can't reach SUPERCALL_KPM_CONTROL: in KP's supercall
+# dispatch KPM_CONTROL sits behind `if (!is_authed) return -EPERM;`.
+# is_authed is only granted by a correct superkey or by being the trusted
+# manager UID (APK signature SHA256 match).  ksu_susfs is a third-party
+# binary with no APK signature match, and the "su" key it passes has no
+# special meaning in this dispatch path (only in handle_supercmd() for the
+# /system/bin/kp su-shell route).  SU-allowed UIDs only get
+# is_trusted_caller, not is_authed, so they're blocked at the gate.  Grep
+# both the legacy "susfs:" tag (built-in susfs) and "susfs_kpm:" (the KPM
+# printk line) so APM can still detect the KPM via dmesg.
 if [ -f $tmpfolder/logs/susfs_active ] || dmesg | grep -qE "susfs:|susfs_kpm:"; then
 		# Detect susfs features this KPM deliberately does NOT implement and
 		# surface them in the WebUI status so users know which capabilities
