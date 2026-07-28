@@ -317,13 +317,32 @@ static long susfs_init(const char *args, const char *event, void *reserved)
     }
     logki("susfs_kpm: init complete (core_symbols=%d)\n", susfs_core_symbols_ok);
 
-    /* Emit a line to the regular kernel log (dmesg) so userspace can
+    /* Emit status to the regular kernel log (dmesg) so userspace can
      * detect the KPM without an authed SUPERCALL_KPM_CONTROL.  The module
-     * scripts grep for "susfs_kpm" in dmesg to set the susfs_active flag.
-     * logki above only reaches KP's internal boot log, not dmesg. */
+     * scripts grep for "susfs_kpm" in dmesg to set the susfs_active flag,
+     * and ksu_susfs show version/features/variant parse these lines.
+     * logki above only reaches KP's internal boot log, not dmesg.
+     *
+     * We emit three machine-parseable lines:
+     *   susfs_kpm: version=<v> variant=<v> core_symbols=<0|1>
+     *   susfs_kpm: features=<comma-separated CONFIG_KSU_SUSFS_* list>
+     *   susfs_kpm: loaded
+     * Userspace greps "susfs_kpm:" and parses key=value pairs. */
     if (susfs_printk) {
-        susfs_printk("susfs_kpm: loaded version=%s variant=%s core_symbols=%d\n",
+        susfs_printk("susfs_kpm: version=%s variant=%s core_symbols=%d\n",
                      SUSFS_KPM_VERSION, SUSFS_KPM_VARIANT, susfs_core_symbols_ok);
+        susfs_printk("susfs_kpm: features=%s\n",
+                     "CONFIG_KSU_SUSFS_SUS_PATH,"
+                     "CONFIG_KSU_SUSFS_SUS_MOUNT,"
+                     "CONFIG_KSU_SUSFS_SUS_KSTAT,"
+                     "CONFIG_KSU_SUSFS_OPEN_REDIRECT,"
+                     "CONFIG_KSU_SUSFS_SUS_MAP,"
+                     "CONFIG_KSU_SUSFS_SET_UNAME,"
+                     "CONFIG_KSU_SUSFS_SPOOF_CMDLINE,"
+                     "CONFIG_KSU_SUSFS_ENABLE_LOG,"
+                     "CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING,"
+                     "CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS");
+        susfs_printk("susfs_kpm: loaded\n");
     }
 
     return 0;

@@ -18,17 +18,15 @@ if dmesg 2>/dev/null | grep -qE "susfs:|susfs_kpm:"; then
 	kpm_in_dmesg=1
 fi
 
-# Step 2: If dmesg shows the KPM, try supercall with a timeout.
-# The first supercall triggers superkey extraction (kptools/boot scan),
-# which is slow — the timeout prevents hanging the boot if extraction
-# fails (e.g. boot partition unreadable, -S root_skey mode).
+# ksu_susfs show version/features/variant now parse dmesg directly (no
+# supercall) — see ksu_susfs/jni/features/show.c.  This is instant and
+# never blocks boot.  We DON'T use `timeout` because the dmesg-based show
+# is already fast and timeout itself may be unavailable in early boot.
 susfs_features=""
 version=""
 if [ $kpm_in_dmesg -eq 1 ]; then
-	# 30s timeout: kptools+boot scan typically takes 5-15s on first run;
-	# after that the key is cached and subsequent calls are instant.
-	susfs_features=$(timeout 30 ${SUSFS_BIN} show enabled_features 2>/dev/null)
-	version=$(timeout 30 ${SUSFS_BIN} show version 2>/dev/null)
+	susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null)
+	version=$(${SUSFS_BIN} show version 2>/dev/null)
 fi
 
 # SUSFS_DECIMAL_MAIN = '1'
@@ -59,22 +57,15 @@ if [ -n "$version" ] || [ -n "$susfs_features" ]; then
 		echo "features: $susfs_features"
 	} > "$diag_file" 2>&1
 elif [ $kpm_in_dmesg -eq 1 ]; then
-	# KPM is loaded (dmesg) but supercall failed — superkey extraction
-	# likely failed or timed out.  Still mark as active so the WebUI
-	# doesn't show "unsupported kernel"; features will show as unavailable.
+	# KPM is loaded (dmesg) but `ksu_susfs show` couldn't parse it.
+	# Still mark as active so the WebUI doesn't show "unsupported kernel".
 	touch $tmpfolder/logs/susfs_active
 	{
 		echo "=== susfs4ksu/post-fs-data ==="
 		echo "timestamp: $(date)"
-		echo "status: ACTIVE (dmesg only — supercall failed)"
+		echo "status: ACTIVE (dmesg only — show parse failed)"
 		echo "uid: $(id -u)"
-		echo "version_probe: (empty)"
-		echo "features_probe: (empty)"
-		echo "note: superkey extraction may have failed or timed out"
-		echo "note: check /data/adb/ap/susfs4ksu/.superkey cache file"
-		echo "dmesg_susfs: $(dmesg 2>/dev/null | grep -iE 'susfs|susfs_kpm' | head -3)"
-		echo "dmesg_kp: $(dmesg 2>/dev/null | grep -iE 'kernelpatch|kpatch' | head -3)"
-		echo "hint: check that boot image has susfs_kpm embedded and KP is loaded"
+		echo "dmesg_susfs: $(dmesg 2>/dev/null | grep -iE 'susfs|susfs_kpm' | head -5)"
 	} > "$diag_file" 2>&1
 else
 	# KPM not found in dmesg at all — not loaded.
