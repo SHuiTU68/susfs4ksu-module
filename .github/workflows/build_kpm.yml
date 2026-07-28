@@ -20,7 +20,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: bmax121/KernelPatch
-          ref: 55c439f
+          # Full 40-char SHA required: short SHAs trigger a branch/tag glob
+          # in actions/checkout's fetch refspec and fail with exit code 1.
+          ref: 55c439fa4d9c945ceeb57a3610b8a9a988647cb5
           path: KernelPatch
 
       - name: Install clang & lld for KPM cross-compile
