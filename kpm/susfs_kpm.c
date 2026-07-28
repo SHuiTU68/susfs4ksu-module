@@ -344,13 +344,15 @@ static long susfs_init(const char *args, const char *event, void *reserved)
                      "CONFIG_KSU_SUSFS_SUS_KSTAT,"
                      "CONFIG_KSU_SUSFS_OPEN_REDIRECT,"
                      "CONFIG_KSU_SUSFS_SUS_MAP,"
-                     "CONFIG_KSU_SUSFS_SET_UNAME,"
-                     "CONFIG_KSU_SUSFS_SPOOF_CMDLINE,"
+                     "CONFIG_KSU_SUSFS_SPOOF_UNAME,"
+                     "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG,"
                      "CONFIG_KSU_SUSFS_ENABLE_LOG,"
                      "CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING,"
                      "CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS,"
                      "CONFIG_KSU_SUSFS_TRY_UMOUNT,"
-                     "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT");
+                     "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT,"
+                     "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT,"
+                     "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT");
         susfs_printk("susfs_kpm: loaded\n");
     }
 

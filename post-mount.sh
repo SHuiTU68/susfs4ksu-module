@@ -60,14 +60,37 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
             umount -l "$i" 2>/dev/null && echo "[try_umount]: susfs4ksu/post-mount umount $i" >> "$logfile1"
         done
     fi
-    # (b) Auto-detect suspicious bind mounts when the WebUI toggle is on.
-    #     We look for mounts whose source is under the module/APatch data
-    #     dirs — these are the overlay/bind mounts root managers create.
-    if [ "$auto_bind" = "1" ] || [ "$auto_umount_bind" = "1" ] || [ "$auto_try_umount" = "1" ]; then
-        echo "[auto_try_umount]: scanning /proc/mounts for suspicious bind mounts" >> "$logfile1"
-        # Mark the KPM advisory flag so the toggle state is recorded.
+    # (b) Auto-add default module mounts — controlled by the WebUI toggle
+    #     which creates/removes the sentinel file
+    #     /data/adb/susfs_no_auto_add_sus_ksu_default_mount.
+    #     When the sentinel is ABSENT (auto-add ON), we umount the standard
+    #     APatch/module overlay mounts so apps can't see them.
+    if [ ! -f /data/adb/susfs_no_auto_add_sus_ksu_default_mount ]; then
+        echo "[auto_mount]: auto-adding default module mounts" >> "$logfile1"
+        for def_mnt in \
+            /data/adb/modules \
+            /data/adb/ap \
+            /data/adb/ksu \
+            /debug_ramdisk
+        do
+            # umount any mount whose source is under def_mnt
+            awk -v s="$def_mnt" '$1 ~ s {print $2}' /proc/mounts 2>/dev/null | while read -r mp; do
+                [ -z "$mp" ] && continue
+                case "$mp" in
+                    /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
+                esac
+                ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null
+                umount -l "$mp" 2>/dev/null && echo "[auto_mount]: umount $mp" >> "$logfile1"
+            done
+        done
+    fi
+    # (c) Auto-detect suspicious bind mounts — controlled by the WebUI
+    #     toggle which creates/removes the sentinel file
+    #     /data/adb/susfs_no_auto_add_sus_bind_mount.
+    if [ ! -f /data/adb/susfs_no_auto_add_sus_bind_mount ] || \
+       [ "$auto_bind" = "1" ] || [ "$auto_umount_bind" = "1" ] || [ "$auto_try_umount" = "1" ]; then
+        echo "[auto_bind]: scanning /proc/mounts for suspicious bind mounts" >> "$logfile1"
         ${SUSFS_BIN} auto_add_try_umount_for_bind_mount 2>/dev/null
-        # Common module/manager mount roots that should be hidden from apps.
         for suspect in \
             /data/adb/modules \
             /data/adb/ap \
@@ -76,14 +99,13 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
             /sbin
         do
             grep -v "#" "$PERSISTENT_DIR/try_umount.txt" 2>/dev/null | grep -q "^${suspect}\$" && continue
-            # Find mount points whose source contains the suspect root.
             awk -v s="$suspect" '$1 ~ s {print $2}' /proc/mounts 2>/dev/null | while read -r mp; do
                 [ -z "$mp" ] && continue
                 case "$mp" in
                     /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
                 esac
                 ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null
-                umount -l "$mp" 2>/dev/null && echo "[auto_try_umount]: umount $mp" >> "$logfile1"
+                umount -l "$mp" 2>/dev/null && echo "[auto_bind]: umount $mp" >> "$logfile1"
             done
         done
     fi

@@ -91,11 +91,17 @@ extern int (*susfs_printk)(const char *fmt, ...);
 #define __NEW_UTS_LEN                       64
 
 /* KPM identity exposed to userspace.
- * VERSION is set to "1.5.2" so the existing module scripts' version checks
- * (which parse the susfs version string) behave correctly.  The KPM itself
- * does not enforce this — it's purely informational for userspace. */
+ * VERSION is set to "1.5.9" to satisfy the WebUI's version gates:
+ *   >= 1.5.3 : kernel support status page visible
+ *   >= 1.5.5 : auto_try_umount toggle
+ *   >= 1.5.7 : hide_sus_mnts toggle
+ *   >= 1.5.8 : umount_for_zygote_iso_service toggle
+ *   >= 1.5.9 : avc_log_spoofing toggle
+ * Scripts use SUSFS_DECIMAL_MAIN (the major) for branching; at 1.5.9 the
+ * major is still 1, so [ $SUSFS_DECIMAL_MAIN -ge 2 ] stays false — no
+ * script behavior change. */
 #define SUSFS_KPM_NAME    "susfs_kpm"
-#define SUSFS_KPM_VERSION "1.5.2"
+#define SUSFS_KPM_VERSION "1.5.9"
 #define SUSFS_KPM_VARIANT "GKI-APATCH"
 
 /* UID schemes for open_redirect (mirror upstream enum) */
