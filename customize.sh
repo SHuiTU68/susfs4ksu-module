@@ -65,13 +65,17 @@ susfs4ksu_config_check() {
 }
 
 # ---- Install userspace binary (with su-fallback wrapper) ----
-# The real binary uses "su" as the supercall key, which only works for uids
-# that APatch has su-granted. Scripts launched by apd (post-fs-data, service,
-# boot-completed) run as root but WITHOUT the grant, so direct calls return
-# EPERM (exit 255). We install the real binary as ksu_susfs_real and create
-# a wrapper script as ksu_susfs that retries via `su -c` when EPERM occurs.
-# This way all 70+ ${SUSFS_BIN} call sites in the module scripts work
-# unchanged.
+# The real binary (ksu_susfs_real) auto-detects the superkey by reading
+# /proc/<apd_pid>/cmdline (where apd's --superkey arg is visible to root).
+# This is necessary because SUPERCALL_KPM_CONTROL requires is_authed, which
+# is granted only by a correct superkey or by being the trusted-manager UID
+# (APK signature match) — SU-allowed UIDs only get is_trusted_caller and are
+# blocked at the KPM_CONTROL gate.
+#
+# The wrapper retries via `su -c` when the real binary returns EPERM (255),
+# which can happen if apd is not yet running (e.g. during module install).
+# Once apd is up, the real binary resolves the superkey itself and succeeds
+# on the first try.
 ui_print "[-] Installing ksu_susfs userspace tool"
 chmod +x "${TMPDIR}/susfs/tools/ksu_susfs_arm64"
 cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs_real
@@ -79,12 +83,13 @@ chmod 755 ${DEST_BIN_DIR}/ksu_susfs_real
 cat > ${DEST_BIN_DIR}/ksu_susfs <<'WRAPPER'
 #!/system/bin/sh
 # ksu_susfs wrapper — retries via APatch su when supercall is rejected.
+# ksu_susfs_real auto-detects the superkey from apd's cmdline; the su -c
+# retry is only needed when apd is not yet running (e.g. during install).
 REAL=/data/adb/ap/bin/ksu_susfs_real
 [ -x "$REAL" ] || exit 127
 "$REAL" "$@"
 rc=$?
-# 255 = -1 = EPERM: supercall rejected because uid is not su-granted.
-# Retry through APatch's su so apd grants the uid before exec'ing.
+# 255 = -1 = EPERM: supercall rejected (apd not running / key not found).
 if [ $rc -eq 255 ] && command -v su >/dev/null 2>&1; then
 	exec su -c "exec '$REAL' $(printf "'%s' " "$@")" 2>/dev/null
 fi
@@ -100,12 +105,13 @@ chmod 755 ${DEST_BIN_DIR}/ksu_susfs
 # Why we don't do a hard check here:
 #   - `apd` has NO kpm subcommand (its CLI only manages APM modules; KPM
 #     load/list/control is exposed via the APP's JNI, not apd CLI).
-#   - `ksu_susfs show version` calls sc_kpm_control("su", ...) which only
-#     succeeds when the caller's uid is in APatch's su allowlist — rarely
-#     true during module install.
-#   - dmesg won't show susfs_kpm: the KPM's boot-time load log goes to
-#     KernelPatch's boot log buffer (retrievable via supercall "bootlog"),
-#     not the regular kernel printk ring.
+#   - `ksu_susfs show version` calls sc_kpm_control(key, ...) which requires
+#     is_authed — only obtainable via the real superkey (auto-detected from
+#     apd's cmdline) or the trusted-manager UID.  During install apd may not
+#     be running yet, so the probe is unreliable.
+#   - dmesg WILL show "susfs_kpm: loaded ..." (the KPM printk's at init),
+#     but we avoid depending on it during install since the KPM may not have
+#     loaded yet if the boot image was just patched.
 #
 # So any probe here is unreliable. The authoritative status is computed
 # after boot by post-fs-data.sh (which sets susfs_active) and reflected in

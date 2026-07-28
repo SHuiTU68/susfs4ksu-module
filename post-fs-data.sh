@@ -110,8 +110,12 @@ enable_sus_su_mode_1(){
 	sed -i "s/^sus_su_active=.*/sus_su_active=1/" ${PERSISTENT_DIR}/config.sh
 	mkdir -p ${MODDIR}/system/bin 2>/dev/null
 	# Copy the new generated sus_su_drv_path and 'sus_su' to /system/bin/ and rename 'sus_su' to 'su' #
-	cp -f /data/adb/ksu/bin/sus_su ${MODDIR}/system/bin/su
-	cp -f /data/adb/ksu/bin/sus_su_drv_path ${MODDIR}/system/bin/sus_su_drv_path
+	# On APatch the binaries live in /data/adb/ap/bin/; fall back to the KSU
+	# path for compatibility with kernels that have both installed.
+	SUS_SU_DIR=/data/adb/ap/bin
+	[ -f ${SUS_SU_DIR}/sus_su ] || SUS_SU_DIR=/data/adb/ksu/bin
+	cp -f ${SUS_SU_DIR}/sus_su ${MODDIR}/system/bin/su
+	cp -f ${SUS_SU_DIR}/sus_su_drv_path ${MODDIR}/system/bin/sus_su_drv_path
 	echo 1 > ${MODDIR}/sus_su_mode
 	return
 }

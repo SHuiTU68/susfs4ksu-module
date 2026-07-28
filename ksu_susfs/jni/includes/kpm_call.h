@@ -2,14 +2,25 @@
  * kpm_call.h - userspace bridge to susfs_kpm via APatch SuperCall.
  *
  * Replaces the upstream `syscall(SYS_reboot, KSU_INSTALL_MAGIC1, SUSFS_MAGIC,
- * CMD_xxx, &info)` pattern with `sc_kpm_control("su", "susfs_kpm", ...)`.
+ * CMD_xxx, &info)` pattern with `sc_kpm_control(key, "susfs_kpm", ...)`.
  *
  * Text protocol on the wire:
  *   "<CMD_HEX_UPPER>|<arg1>|<arg2>|..."
  * The KPM parses this string and dispatches to feature handlers.
  *
- * Auth: when ksu_susfs is invoked as root via APatch's su, it can pass "su"
- * as the superkey.  See KernelPatch/user/supercall.h:sc_kpm_control().
+ * Auth: SUPERCALL_KPM_CONTROL sits behind `if (!is_authed) return -EPERM;`
+ * in KP's supercall dispatch.  is_authed is granted only by (a) a correct
+ * superkey via auth_superkey(), or (b) being the trusted manager UID (APK
+ * signature SHA256 match in userd.c).  ksu_susfs is a third-party binary —
+ * it is NOT the trusted manager, so the ONLY way to get is_authed is to
+ * pass the real superkey.  SU-allowed UIDs (including root) only get
+ * is_trusted_caller, which is NOT enough for KPM_CONTROL.
+ *
+ * The superkey is not stored in any file — apd receives it via its
+ * `--superkey`/`-k` command-line argument.  Since ksu_susfs runs as root,
+ * it can read `/proc/<apd_pid>/cmdline` to extract the real superkey.
+ * get_supercall_key() does exactly this, falling back to "su" (which works
+ * only on KP configs where no superkey has been preset) if apd is not found.
  *
  * Note on version_code: as of KernelPatch 0.13.x the kernel does NOT enforce
  * the version_code field (it's parsed but unused — see kernel/patch/common/
@@ -26,6 +37,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <fcntl.h>
 
 /* Mirror of KernelPatch/kernel/patch/include/uapi/scdefs.h (subset) */
 #define __NR_supercall          45
@@ -41,24 +53,79 @@
 /* Module name registered by the KPM (must match KPM_NAME in susfs_kpm.c) */
 #define SUSFS_KPM_NAME "susfs_kpm"
 
-/* Auth key: "su" works if the caller's uid is in APatch's su allowlist,
- * which is the case when ksu_susfs is launched via `su -c`. */
-#define SUSFS_KPM_KEY "su"
-
 static inline long _kpm_ver_and_cmd(long cmd)
 {
     unsigned int version_code = (KP_MAJOR << 16) + (KP_MINOR << 8) + KP_PATCH;
     return ((long)version_code << 32) | (0x1158L << 16) | (cmd & 0xFFFF);
 }
 
-/* Issue sc_kpm_control("su", "susfs_kpm", ctl_args, out, outlen).
+/* Auto-detect the superkey from apd's process cmdline.
+ *
+ * apd is started by APatch's init scripts with `apd --superkey <KEY> ...`
+ * (or `-k <KEY>`).  The superkey is not persisted to any file, but it IS
+ * visible in /proc/<apd_pid>/cmdline as a null-separated argument list.
+ * ksu_susfs runs as root, so it can read that file.
+ *
+ * Returns a pointer to a static buffer containing the key, or "su" as a
+ * fallback (which only works when no superkey has been preset in KP). */
+static inline const char *get_supercall_key(void)
+{
+    static char key_buf[SUPERCALL_KEY_MAX_LEN];
+    static int initialized = 0;
+    if (initialized) return key_buf;
+    initialized = 1;
+
+    /* Default fallback */
+    strcpy(key_buf, "su");
+
+    /* Get apd's PID via pidof (returns space-separated PIDs, take first) */
+    FILE *fp = popen("pidof apd 2>/dev/null", "r");
+    if (!fp) return key_buf;
+    char pid_str[32];
+    if (!fgets(pid_str, sizeof(pid_str), fp)) { pclose(fp); return key_buf; }
+    pclose(fp);
+    pid_str[strcspn(pid_str, " \n")] = '\0';
+    if (!pid_str[0]) return key_buf;
+
+    /* Read /proc/<pid>/cmdline — null-separated argv */
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%s/cmdline", pid_str);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return key_buf;
+    char buf[4096];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return key_buf;
+    buf[n] = '\0';
+
+    /* Walk null-separated args looking for --superkey <KEY> or -k <KEY> */
+    char *p = buf;
+    char *end = buf + n;
+    while (p < end) {
+        size_t len = strnlen(p, (size_t)(end - p));
+        if (len == 0) break;
+        if (strcmp(p, "--superkey") == 0 || strcmp(p, "-k") == 0) {
+            char *val = p + len + 1;
+            if (val < end && val[0]) {
+                strncpy(key_buf, val, sizeof(key_buf) - 1);
+                key_buf[sizeof(key_buf) - 1] = '\0';
+                break;
+            }
+        }
+        p += len + 1;
+    }
+
+    return key_buf;
+}
+
+/* Issue sc_kpm_control(key, "susfs_kpm", ctl_args, out, outlen).
  * Returns the kernel-side return value (0 on success, negative errno on
  * failure).  out_msg / outlen may be 0 / 0 if no response is expected. */
 static inline long kpm_control(const char *ctl_args,
                                char *out_msg, long outlen)
 {
     if (!ctl_args || !*ctl_args) return -EINVAL;
-    return syscall(__NR_supercall, SUSFS_KPM_KEY,
+    return syscall(__NR_supercall, get_supercall_key(),
                    _kpm_ver_and_cmd(SUPERCALL_KPM_CONTROL),
                    SUSFS_KPM_NAME, ctl_args, out_msg, outlen);
 }
@@ -66,7 +133,7 @@ static inline long kpm_control(const char *ctl_args,
 /* Build a text-protocol message from a printf-style format and send it.
  *
  * Example:
- *   kpm_send(0x55550, "%s", "/data/adb/ksu");
+ *   kpm_send(0x55550, "%s", "/data/adb/ap");
  *   kpm_send(0x555a0, "%d", 1);
  *   kpm_send(0x555e1, NULL);            // show version, no args
  *
