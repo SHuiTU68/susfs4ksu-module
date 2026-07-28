@@ -161,6 +161,8 @@ int susfs_set_log_enabled(int enabled);
 int susfs_set_avc_log_spoofing(int enabled);
 int susfs_get_log_enabled(void);
 int susfs_get_avc_log_spoofing(void);
+int susfs_avc_log_spoofing_init_hooks(void);
+void susfs_avc_log_spoofing_cleanup(void);
 
 /* features/show.c */
 int susfs_show_version(char *out, int outlen);

@@ -316,6 +316,7 @@ static long susfs_init(const char *args, const char *event, void *reserved)
     rc |= susfs_sus_map_init_hooks();
     rc |= susfs_set_uname_init_hooks();
     rc |= susfs_set_cmdline_init_hooks();
+    rc |= susfs_avc_log_spoofing_init_hooks();
 
     if (rc) {
         logke("susfs_kpm: one or more hook installations failed (rc=%d), "
@@ -386,6 +387,7 @@ static long susfs_exit(void *reserved)
     susfs_sus_map_cleanup();
     susfs_set_uname_cleanup();
     susfs_set_cmdline_cleanup();
+    susfs_avc_log_spoofing_cleanup();
     return 0;
 }
 
