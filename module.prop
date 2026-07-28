@@ -1,10 +1,9 @@
 id=susfs4ksu
-name=SUSFS-FOR-KERNELSU
-version=v1.5.2-R28
+name=SUSFS-FOR-APATCH-KPM
+version=v1.5.2-KPM-R28
 versionCode=105002028
-author=sidex15 & simonpunk
-description=An addon root hiding service for KernelSU compiled with patched kernel source.
-updateJson=https://raw.githubusercontent.com/sidex15/ksu_module_susfs/v1.5.2+/update.json
+author=sidex15 & simonpunk (KPM port)
+description=susfs reimplementation for APatch via KernelPatch Module (KPM). Targets android15-6.6 GKI. No sus_su.
 banner=banner.png
 webuiIcon=susfsicon.png
 actionIcon=susfsicon.png

@@ -1,9 +1,9 @@
 #!/bin/sh
 MODDIR=/data/adb/modules/susfs4ksu
-SUSFS_BIN=/data/adb/ksu/bin/ksu_susfs
+SUSFS_BIN=/data/adb/ap/bin/ksu_susfs
 . ${MODDIR}/utils.sh
 PERSISTENT_DIR=/data/adb/susfs4ksu
-tmpfolder=/data/adb/ksu/susfs4ksu
+tmpfolder=/data/adb/ap/susfs4ksu
 logfile="$tmpfolder/logs/susfs.log"
 logfile1="$tmpfolder/logs/susfs1.log"
 

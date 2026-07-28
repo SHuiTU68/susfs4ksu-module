@@ -1,1 +1,10 @@
 *.zip
+# KPM build artifacts
+kpm/build/
+*.kpm
+# userspace build artifacts
+ksu_susfs/obj/
+ksu_susfs/libs/
+ksu_susfs_arm64
+# local KernelPatch checkout (for header references)
+KernelPatch/

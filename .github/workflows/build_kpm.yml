@@ -1,0 +1,100 @@
+name: Build KPM Module
+
+on:
+  push:
+    paths-ignore:
+      - 'README.md'
+      - '*.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+  workflow_dispatch:
+
+jobs:
+  build-kpm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout module
+        uses: actions/checkout@v4
+
+      - name: Checkout KernelPatch (for KPM headers)
+        uses: actions/checkout@v4
+        with:
+          repository: bmax121/KernelPatch
+          ref: 55c439f
+          path: KernelPatch
+
+      - name: Install clang & lld for KPM cross-compile
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm
+          clang --version
+          ld.lld --version
+
+      - name: Build susfs_kpm.kpm
+        run: |
+          cd kpm
+          make clean || true
+          # clang + lld: the Arm GNU bare-metal toolchain rejects
+          # -mno-outline-atomics, so we cross-compile with clang instead.
+          make CC_OVERRIDE="clang --target=aarch64-linux-gnu" \
+               KP_DIR=../KernelPatch -j$(nproc)
+          echo "=== KPM built ==="
+          file build/susfs_kpm.kpm
+          cp build/susfs_kpm.kpm ../susfs_kpm.kpm
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          add-to-path: false
+
+      - name: Build ksu_susfs userspace binary
+        run: |
+          cd ksu_susfs
+          ${NDK_ROOT}/ndk-build -j$(nproc) NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk NDK_APPLICATION_MK=jni/Application.mk
+          echo "=== ksu_susfs binary built ==="
+          file libs/arm64-v8a/ksu_susfs
+          cp libs/arm64-v8a/ksu_susfs ../ksu_susfs_arm64
+        env:
+          NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+      - name: Update version with git HEAD
+        run: |
+          RANDOM_STRING=$(git rev-parse --short HEAD | cut -c1-7)
+          echo "BUILD_ID=${RANDOM_STRING}" >> $GITHUB_ENV
+          sed -i "s/version=v.*/version=v1.5.2-KPM-CI-${RANDOM_STRING}/" module.prop
+
+      - name: Assemble module zip
+        run: |
+          mkdir -p assemble/tools
+          # ship the freshly built binary and KPM
+          cp ksu_susfs_arm64 assemble/tools/ksu_susfs_arm64
+          cp susfs_kpm.kpm assemble/susfs_kpm.kpm
+          # copy all module files
+          for f in module.prop customize.sh service.sh post-fs-data.sh post-mount.sh \
+                   boot-completed.sh action.sh uninstall.sh sepolicy.rule utils.sh \
+                   config.sh susfs_reset.sh susfs-bin-check.sh susfs-bin-update.sh \
+                   banner.png susfsicon.png update.json legit_mounts.txt \
+                   sus_mount.txt try_umount.txt sus_path.txt sus_path_loop.txt \
+                   sus_maps.txt sus_open_redirect.txt sus_kstat_statically.json; do
+            [ -f "$f" ] && cp "$f" assemble/
+          done
+          # webroot
+          [ -d webroot ] && cp -r webroot assemble/
+          cd assemble
+          zip -r9 ../susfs4ap-kpm-${{ env.BUILD_ID }}.zip .
+          cd ..
+          ls -lh susfs4ap-kpm-*.zip
+
+      - name: Upload KPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: susfs_kpm-${{ env.BUILD_ID }}
+          path: susfs_kpm.kpm
+
+      - name: Upload module zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: susfs4ap-kpm-${{ env.BUILD_ID }}
+          path: susfs4ap-kpm-*.zip

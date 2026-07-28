@@ -1,9 +1,9 @@
-SUSFS_BIN=/data/adb/ksu/bin/ksu_susfs
-KSU_BIN=/data/adb/ksu/bin/
-TMPDIR=/data/adb/ksu/susfs4ksu
+SUSFS_BIN=/data/adb/ap/bin/ksu_susfs
+AP_BIN=/data/adb/ap/bin/
+TMPDIR=/data/adb/ap/susfs4ksu
 
 echo "***************************************"
-echo "SUSFS4KSU Userspace tool update script"
+echo "SUSFS4AP Userspace tool update script"
 echo "***************************************"
 
 download() { busybox wget -T 10 --no-check-certificate -qO - "$1"; }
@@ -11,7 +11,7 @@ if command -v curl > /dev/null 2>&1; then
 	download() { curl --connect-timeout 10 -Ls "$1"; }
 fi
 
-check() { 
+check() {
     if command -v curl > /dev/null 2>&1; then
         curl -s --max-time 5 --head "$1" > /dev/null 2>&1
     else
@@ -34,7 +34,7 @@ susfsupdate() {
 		chmod +x ${TMPDIR}/ksu_susfs_remote
 		if ${TMPDIR}/ksu_susfs_remote > /dev/null 2>&1 ; then
 			# test ok
-			cp -f ${TMPDIR}/ksu_susfs_remote ${KSU_BIN}/ksu_susfs
+			cp -f ${TMPDIR}/ksu_susfs_remote ${AP_BIN}/ksu_susfs
             echo "[-] Update Complete!"
 		else
 			# test failed

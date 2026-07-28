@@ -1,24 +1,40 @@
 #!/bin/sh
-PATH=/data/adb/ksu/bin:/data/data/com.termux/files/usr/bin:$PATH
-KSU_BIN=/data/adb/ksu/bin/ksud
-DEST_BIN_DIR=/data/adb/ksu/bin
+# susfs4ap-module customize.sh — APatch + KPM edition.
+#
+# This installer ships TWO artifacts:
+#   1. tools/ksu_susfs_arm64  — userspace CLI that talks to the KPM via
+#      sc_kpm_control() (APatch supercall). Installed to /data/adb/ap/bin/.
+#   2. susfs_kpm.kpm          — KernelPatch Module loaded by apd. Installed
+#      to /data/adb/kpm/ so APatch auto-loads it on every boot.
+#
+# The original susfs4ksu downloaded a generic binary from the cloud; that
+# binary uses the KernelSU reboot-magic syscall and is NOT compatible with
+# APatch. We therefore ship our own binary and skip the cloud update.
+PATH=/data/adb/ap/bin:/data/adb/ksu/bin:/data/data/com.termux/files/usr/bin:$PATH
+AP_BIN=/data/adb/ap/bin/apd
+DEST_BIN_DIR=/data/adb/ap/bin
+KPM_DIR=/data/adb/kpm
 
-if [ -z "$KSU" ] ; then
-	abort '[!] SuSFS is for KernelSU only.'
+if [ -z "$APATCH" ] ; then
+	abort '[!] SUSFS-KPM is for APatch only.'
 fi
 
-if [ ! -d ${DEST_BIN_DIR} ]; then
-    ui_print "'${DEST_BIN_DIR}' not existed, installation aborted."
+if [ ! -x "${AP_BIN}" ]; then
+    ui_print "[!] '${AP_BIN}' not found, installation aborted."
     rm -rf ${MODPATH}
     exit 1
 fi
+
+# Ensure the APatch bin dir exists (it should, since apd lives there)
+mkdir -p ${DEST_BIN_DIR}
+mkdir -p ${KPM_DIR}
 
 unzip -qq ${ZIPFILE} -d ${TMPDIR}/susfs
 
 susfs4ksu_config_check() {
   ui_print " "
   ui_print "****************************************"
-  ui_print "     SUSFS4KSU Config Folder exists     "
+  ui_print "     SUSFS4AP Config Folder exists      "
   ui_print "****************************************"
   ui_print "     Do you want to reset settings?     "
   ui_print "****************************************"
@@ -38,7 +54,7 @@ susfs4ksu_config_check() {
     local key_event=$(timeout 0.5 getevent -l 2>/dev/null)
     if echo "$key_event" | grep -q "KEY_VOLUMEUP"; then
       ui_print "[-] Key Detected: Selected Yes, reset to default"
-	  ui_print "[-] Resetting susfs4ksu settings to default..."
+	  ui_print "[-] Resetting susfs4ap settings to default..."
 	  rm -rf /data/adb/susfs4ksu
       break
     elif echo "$key_event" | grep -q "KEY_VOLUMEDOWN"; then
@@ -48,89 +64,32 @@ susfs4ksu_config_check() {
   done
 }
 
-download() { busybox wget -T 10 --no-check-certificate -qO - "$1"; }
-if command -v curl > /dev/null 2>&1; then
-	download() { curl --connect-timeout 10 -Ls "$1"; }
-fi
-
-check() { 
-    if command -v curl > /dev/null 2>&1; then
-        curl -s --max-time 5 --head "$1" > /dev/null 2>&1
-    else
-        busybox wget --no-check-certificate --timeout=5 --spider -q "$1" > /dev/null 2>&1
-    fi
-}
-
-# Checking KernelSU Version
-ksuver=$(${KSU_BIN} debug version | cut -d' ' -f3)
-ui_print "[-] Detected KernelSU version: $ksuver"
-susfs_temp_bin="pre-20000"
-
-if [ ${ksuver} -gt 19999 ] 2>/dev/null; then
-	ui_print "[-] KernelSU version is using supercalls, using v2.0.0 binary for checking"
-	susfs_temp_bin="20000"
-fi
-
+# ---- Install userspace binary ----
+ui_print "[-] Installing ksu_susfs userspace tool"
 chmod +x "${TMPDIR}/susfs/tools/ksu_susfs_arm64"
-# Example output = 'v1.5.3'
-SUSFS_VERSION_RAW="$(${TMPDIR}/susfs/tools/ksu_susfs_arm64 show version)"
+cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs
+chmod 755 ${DEST_BIN_DIR}/ksu_susfs
 
-# dl logic, shorthand
-# download remote
-#    test binary; if fail use whats shipped
-# if dl fail; use whats shipped
+# ---- Install KPM ----
+ui_print "[-] Installing susfs_kpm.kpm"
+cp ${TMPDIR}/susfs/susfs_kpm.kpm ${KPM_DIR}/susfs_kpm.kpm
+chmod 644 ${KPM_DIR}/susfs_kpm.kpm
+
+# Load the KPM immediately so the just-installed binary can talk to it.
+# APatch auto-loads KPMs from ${KPM_DIR} on subsequent boots.
+ui_print "[-] Loading susfs_kpm into kernel"
+if ${AP_BIN} kpm load ${KPM_DIR}/susfs_kpm.kpm 2>/dev/null; then
+	ui_print "[-] KPM loaded successfully"
+else
+	ui_print "[!] KPM load failed (may already be loaded or needs reboot)"
+fi
+
+# Quick smoke-test: ask the binary for the KPM version.
+SUSFS_VERSION_RAW="$(${DEST_BIN_DIR}/ksu_susfs show version 2>/dev/null)"
 if [ -n "$SUSFS_VERSION_RAW" ] 2>/dev/null; then
-	ui_print "[-] Kernel is using susfs $SUSFS_VERSION_RAW"	
-	# SUSFS_DECIMAL_MAIN = '1'
-	SUSFS_DECIMAL_MAIN=$(echo "$SUSFS_VERSION_RAW" | sed 's/^v//;' | cut -d'.' -f1)
+	ui_print "[-] susfs_kpm version: $SUSFS_VERSION_RAW"
 else
-	ui_print "[-] Kernel is using susfs v1.5.2"
-fi
-
-# Check connectivity first
-ui_print "[-] Checking susfs binary cloud connection"
-base_url="https://raw.githubusercontent.com/sidex15/susfs4ksu-binaries/universal-binary/ksu_susfs_arm64"
-if check "$base_url"; then
-	ui_print "[-] susfs binary cloud connection established"
-	# Check the hash of susfs binaries
-	hash=$(sha256sum ${TMPDIR}/susfs/tools/ksu_susfs_arm64 | awk '{print $1}')
-	cloudhash=$(download https://raw.githubusercontent.com/sidex15/susfs4ksu-binaries/universal-binary/ksu_susfs_arm64 | sha256sum | awk '{print $1}')
-	if [ $hash = $cloudhash > /dev/null 2>&1 ]; then
-		ui_print "[-] susfs local and cloud binary hash is the same"
-		ui_print "[-] skipping binary cloud update"
-	else
-		ui_print "[-] Downloading latest susfs binary from the internet"
-		download "https://raw.githubusercontent.com/sidex15/susfs4ksu-binaries/universal-binary/ksu_susfs_arm64" > ${MODPATH}/ksu_susfs_remote
-		# test downloaded binary
-		chmod +x ${MODPATH}/ksu_susfs_remote
-		if ${MODPATH}/ksu_susfs_remote > /dev/null 2>&1 ; then
-			# test ok
-			ui_print "[-] Downloaded susfs binary is working, using it for installation"
-			cp -f ${MODPATH}/ksu_susfs_remote ${DEST_BIN_DIR}/ksu_susfs
-		else
-			# test failed
-			ui_print "[!] Downloaded susfs binary is not working, using local binary for installation"
-			cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs
-		fi
-	fi
-else
-	# failed
-	ui_print "[!] No internet connection"
-	ui_print "[-] Using local susfs binaries"
-	cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs
-fi
-
-# cleanup
-rm -f ${MODPATH}/ksu_susfs_remote > /dev/null 2>&1
-
-# copy sus_su over
-if [ -n "$SUSFS_DECIMAL_MAIN" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 2 ]; then
-	ui_print "[!] Susfs version v2.0.0+ detected, sus_su is deprecated"
-	ui_print "[-] Skipping sus_su installation"
-else
-	ui_print "[-] Installing sus_su"
-	cp ${TMPDIR}/susfs/tools/sus_su_arm64 ${DEST_BIN_DIR}/sus_su
-	chmod 755 ${DEST_BIN_DIR}/ksu_susfs ${DEST_BIN_DIR}/sus_su
+	ui_print "[!] ksu_susfs could not contact KPM — reboot may be required"
 fi
 
 # set permissions
@@ -143,7 +102,7 @@ fi
 
 prop_value=$(getprop ro.boot.vbmeta.digest)
 HASH_DIR=/data/adb/VerifiedBootHash
-if ${KSU_BIN} module list | grep -qE "vbmeta-fixer|TA_utl"; then
+if ${AP_BIN} module list 2>/dev/null | grep -qE "vbmeta-fixer|TA_utl"; then
 	ui_print "****************************************"
 	ui_print "! vbmeta-fixer or Tricky Addon module detected"
 	ui_print "! skipping VerifiedBootHash creation"
@@ -168,7 +127,7 @@ else
 	fi
 fi
 
-ui_print "[-] Preparing susfs4ksu persistent directory"
+ui_print "[-] Preparing susfs4ap persistent directory"
 PERSISTENT_DIR=/data/adb/susfs4ksu
 [ ! -d /data/adb/susfs4ksu ] && mkdir -p $PERSISTENT_DIR
 files="sus_mount.txt try_umount.txt sus_path.txt sus_path_loop.txt sus_maps.txt sus_open_redirect.txt legit_mounts.txt sus_kstat_statically.json config.sh"

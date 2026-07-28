@@ -1,6 +1,7 @@
 susfs_log=1
-sus_su=2
-sus_su_active=2
+# sus_su is not implemented in the KPM — always disabled.
+sus_su=-1
+sus_su_active=-1
 hide_cusrom=0
 hide_vendor_sepolicy=0
 hide_compat_matrix=0

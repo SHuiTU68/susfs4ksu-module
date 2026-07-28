@@ -1,6 +1,6 @@
 #!/bin/sh
-SUSFS_BIN=/data/adb/ksu/bin/ksu_susfs
-TMPDIR=/data/adb/ksu/susfs4ksu
+SUSFS_BIN=/data/adb/ap/bin/ksu_susfs
+TMPDIR=/data/adb/ap/susfs4ksu
 
 download() { busybox wget -T 1 --no-check-certificate -qO - "$1"; }
 if command -v curl > /dev/null 2>&1; then

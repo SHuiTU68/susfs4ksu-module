@@ -1,7 +1,7 @@
 #!/bin/sh
-SUSFS_BIN=/data/adb/ksu/bin/ksu_susfs
-KSU_BIN=/data/adb/ksu/bin/
-TMPDIR=/data/adb/ksu/susfs4ksu
+SUSFS_BIN=/data/adb/ap/bin/ksu_susfs
+AP_BIN=/data/adb/ap/bin/
+TMPDIR=/data/adb/ap/susfs4ksu
 
 echo "***************************************"
 echo "SUSFS4KSU Userspace tool update script"
@@ -21,7 +21,7 @@ if download "https://raw.githubusercontent.com/sidex15/susfs4ksu-binaries/univer
     chmod +x ${TMPDIR}/ksu_susfs_remote
     if ${TMPDIR}/ksu_susfs_remote > /dev/null 2>&1 ; then
 		# test ok
-		mv -f ${TMPDIR}/ksu_susfs_remote ${KSU_BIN}/ksu_susfs
+		mv -f ${TMPDIR}/ksu_susfs_remote ${AP_BIN}/ksu_susfs
 		echo "[-] Update Complete!"
     else
 		# test failed

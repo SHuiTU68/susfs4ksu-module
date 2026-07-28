@@ -1,10 +1,10 @@
 #!/bin/sh
 MODDIR=/data/adb/modules/susfs4ksu
-SUSFS_BIN=/data/adb/ksu/bin/ksu_susfs
-KSU_BIN=/data/adb/ksu/bin/ksud
+SUSFS_BIN=/data/adb/ap/bin/ksu_susfs
+AP_BIN=/data/adb/ap/bin/apd
 . ${MODDIR}/utils.sh
 PERSISTENT_DIR=/data/adb/susfs4ksu
-tmpfolder=/data/adb/ksu/susfs4ksu
+tmpfolder=/data/adb/ap/susfs4ksu
 logfile="$tmpfolder/logs/susfs.log"
 logfile1="$tmpfolder/logs/susfs1.log"
 version=$(${SUSFS_BIN} show version)
@@ -52,7 +52,7 @@ fi
 
 # Enable ksud umount feature for susfs mounts (SUSFS v2.0.0+)
 if [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && [ $auto_try_umount = 1 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
-		${KSU_BIN} feature set 1 1 && echo "[ksud umount enabled]: susfs4ksu/boot-completed" >> $logfile1
+		${AP_BIN} feature set 1 1 && echo "[ksud umount enabled]: susfs4ksu/boot-completed" >> $logfile1
 fi
 
 # hide sus mounts for all processes v1.5.7+
@@ -177,7 +177,7 @@ fi
 		if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
 			${SUSFS_BIN} add_try_umount "${LINE}" 1 && echo "[try_umount (SUSFS)]: susfs4ksu/boot-completed ${LINE}" >> $logfile1
 		elif [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
-			${KSU_BIN} kernel umount add "${LINE}" --flags 2 && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed ${LINE}" >> $logfile1
+			${AP_BIN} kernel umount add "${LINE}" --flags 2 && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed ${LINE}" >> $logfile1
 		fi
 	done
 
@@ -195,7 +195,7 @@ fi
 if [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
 	if grep -v "#" "$PERSISTENT_DIR/try_umount.txt" > /dev/null; then
 		grep -v "#" "$PERSISTENT_DIR/try_umount.txt" | while read -r i; do
-			[ -z "$i" ] || { ${KSU_BIN} kernel umount add "$i" --flags 2 && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed $i" >> "$logfile1"; }
+			[ -z "$i" ] || { ${AP_BIN} kernel umount add "$i" --flags 2 && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed $i" >> "$logfile1"; }
 		done
 	fi
 fi
@@ -296,7 +296,7 @@ fi
 			${SUSFS_BIN} add_try_umount $path 1 && echo "[try_umount] susfs4ksu/boot-completed: $path [add_try_umount] $i" >> $logfile1
 		fi
 		if [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
-			${KSU_BIN} kernel umount add $path --flags 2 && echo "[try_umount (KSUD)] susfs4ksu/boot-completed: $path [add_try_umount] $i" >> $logfile1
+			${AP_BIN} kernel umount add $path --flags 2 && echo "[try_umount (KSUD)] susfs4ksu/boot-completed: $path [add_try_umount] $i" >> $logfile1
 		fi
 		done
 	}
@@ -307,12 +307,12 @@ fi
 # This is for SUSFS v2.0.0+ where ksud umount feature is used
 [ $force_hide_lsposed = 1 ] && [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && {
 	echo "susfs4ksu/boot-completed: [force_hide_lsposed]" >> $logfile1
-	${KSU_BIN} kernel umount add /system/apex/com.android.art/bin/dex2oat --flags 2
-	${KSU_BIN} kernel umount add /system/apex/com.android.art/bin/dex2oat32 --flags 2
-	${KSU_BIN} kernel umount add /system/apex/com.android.art/bin/dex2oat64 --flags 2
-	${KSU_BIN} kernel umount add /apex/com.android.art/bin/dex2oat --flags 2
-	${KSU_BIN} kernel umount add /apex/com.android.art/bin/dex2oat32 --flags 2
-	${KSU_BIN} kernel umount add /apex/com.android.art/bin/dex2oat64 --flags 2
+	${AP_BIN} kernel umount add /system/apex/com.android.art/bin/dex2oat --flags 2
+	${AP_BIN} kernel umount add /system/apex/com.android.art/bin/dex2oat32 --flags 2
+	${AP_BIN} kernel umount add /system/apex/com.android.art/bin/dex2oat64 --flags 2
+	${AP_BIN} kernel umount add /apex/com.android.art/bin/dex2oat --flags 2
+	${AP_BIN} kernel umount add /apex/com.android.art/bin/dex2oat32 --flags 2
+	${AP_BIN} kernel umount add /apex/com.android.art/bin/dex2oat64 --flags 2
 }
 
 # if hide_sus_mnts_for_all_or_non_su_procs = 2, turn off hide sus mounts for all processes after boot completed

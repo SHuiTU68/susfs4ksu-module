@@ -1,5 +1,5 @@
 #!/bin/sh
-PATH=/data/adb/ksu/bin:$PATH
+PATH=/data/adb/ap/bin:$PATH
 kernel_version='default'
 kernel_build='default'
 [ -f $PERSISTENT_DIR/config.sh ] && . $PERSISTENT_DIR/config.sh
