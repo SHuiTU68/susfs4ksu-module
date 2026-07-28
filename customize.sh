@@ -1,11 +1,13 @@
 #!/bin/sh
 # susfs4ap-module customize.sh — APatch + KPM edition.
 #
-# This installer ships TWO artifacts:
-#   1. tools/ksu_susfs_arm64  — userspace CLI that talks to the KPM via
-#      sc_kpm_control() (APatch supercall). Installed to /data/adb/ap/bin/.
-#   2. susfs_kpm.kpm          — KernelPatch Module loaded by apd. Installed
-#      to /data/adb/kpm/ so APatch auto-loads it on every boot.
+# This installer ships ONE artifact:
+#   tools/ksu_susfs_arm64 — userspace CLI that talks to the KPM via
+#   sc_kpm_control() (APatch supercall). Installed to /data/adb/ap/bin/.
+#
+# The KPM itself (susfs_kpm.kpm) is NOT shipped here — the user bakes it
+# into the boot image, so APatch auto-loads it on every boot. This module
+# only installs the userspace tool and verifies the KPM is resident.
 #
 # The original susfs4ksu downloaded a generic binary from the cloud; that
 # binary uses the KernelSU reboot-magic syscall and is NOT compatible with
@@ -13,7 +15,6 @@
 PATH=/data/adb/ap/bin:/data/adb/ksu/bin:/data/data/com.termux/files/usr/bin:$PATH
 AP_BIN=/data/adb/ap/bin/apd
 DEST_BIN_DIR=/data/adb/ap/bin
-KPM_DIR=/data/adb/kpm
 
 if [ -z "$APATCH" ] ; then
 	abort '[!] SUSFS-KPM is for APatch only.'
@@ -27,7 +28,6 @@ fi
 
 # Ensure the APatch bin dir exists (it should, since apd lives there)
 mkdir -p ${DEST_BIN_DIR}
-mkdir -p ${KPM_DIR}
 
 unzip -qq ${ZIPFILE} -d ${TMPDIR}/susfs
 
@@ -64,32 +64,60 @@ susfs4ksu_config_check() {
   done
 }
 
-# ---- Install userspace binary ----
+# ---- Install userspace binary (with su-fallback wrapper) ----
+# The real binary uses "su" as the supercall key, which only works for uids
+# that APatch has su-granted. Scripts launched by apd (post-fs-data, service,
+# boot-completed) run as root but WITHOUT the grant, so direct calls return
+# EPERM (exit 255). We install the real binary as ksu_susfs_real and create
+# a wrapper script as ksu_susfs that retries via `su -c` when EPERM occurs.
+# This way all 70+ ${SUSFS_BIN} call sites in the module scripts work
+# unchanged.
 ui_print "[-] Installing ksu_susfs userspace tool"
 chmod +x "${TMPDIR}/susfs/tools/ksu_susfs_arm64"
-cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs
+cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs_real
+chmod 755 ${DEST_BIN_DIR}/ksu_susfs_real
+cat > ${DEST_BIN_DIR}/ksu_susfs <<'WRAPPER'
+#!/system/bin/sh
+# ksu_susfs wrapper — retries via APatch su when supercall is rejected.
+REAL=/data/adb/ap/bin/ksu_susfs_real
+[ -x "$REAL" ] || exit 127
+"$REAL" "$@"
+rc=$?
+# 255 = -1 = EPERM: supercall rejected because uid is not su-granted.
+# Retry through APatch's su so apd grants the uid before exec'ing.
+if [ $rc -eq 255 ] && command -v su >/dev/null 2>&1; then
+	exec su -c "exec '$REAL' $(printf "'%s' " "$@")" 2>/dev/null
+fi
+exit $rc
+WRAPPER
 chmod 755 ${DEST_BIN_DIR}/ksu_susfs
 
-# ---- Install KPM ----
-ui_print "[-] Installing susfs_kpm.kpm"
-cp ${TMPDIR}/susfs/susfs_kpm.kpm ${KPM_DIR}/susfs_kpm.kpm
-chmod 644 ${KPM_DIR}/susfs_kpm.kpm
-
-# Load the KPM immediately so the just-installed binary can talk to it.
-# APatch auto-loads KPMs from ${KPM_DIR} on subsequent boots.
-ui_print "[-] Loading susfs_kpm into kernel"
-if ${AP_BIN} kpm load ${KPM_DIR}/susfs_kpm.kpm 2>/dev/null; then
-	ui_print "[-] KPM loaded successfully"
-else
-	ui_print "[!] KPM load failed (may already be loaded or needs reboot)"
-fi
-
-# Quick smoke-test: ask the binary for the KPM version.
+# ---- KPM residency check (advisory only) ----
+# The KPM is baked into the boot image by the user and auto-loaded by
+# KernelPatch at boot via the extra_item mechanism — this module does NOT
+# install or load it.
+#
+# Why we don't do a hard check here:
+#   - `apd` has NO kpm subcommand (its CLI only manages APM modules; KPM
+#     load/list/control is exposed via the APP's JNI, not apd CLI).
+#   - `ksu_susfs show version` calls sc_kpm_control("su", ...) which only
+#     succeeds when the caller's uid is in APatch's su allowlist — rarely
+#     true during module install.
+#   - dmesg won't show susfs_kpm: the KPM's boot-time load log goes to
+#     KernelPatch's boot log buffer (retrievable via supercall "bootlog"),
+#     not the regular kernel printk ring.
+#
+# So any probe here is unreliable. The authoritative status is computed
+# after boot by post-fs-data.sh (which sets susfs_active) and reflected in
+# the WebUI by boot-completed.sh. We only try the end-to-end probe as a
+# convenience and never treat failure as an error.
+ui_print "[-] Probing susfs_kpm (advisory — install-time probe is unreliable)"
 SUSFS_VERSION_RAW="$(${DEST_BIN_DIR}/ksu_susfs show version 2>/dev/null)"
 if [ -n "$SUSFS_VERSION_RAW" ] 2>/dev/null; then
-	ui_print "[-] susfs_kpm version: $SUSFS_VERSION_RAW"
+	ui_print "[-] susfs_kpm active, version: $SUSFS_VERSION_RAW"
 else
-	ui_print "[!] ksu_susfs could not contact KPM — reboot may be required"
+	ui_print "[-] KPM not reachable now — reboot to activate; status will be"
+	ui_print "[-] shown in WebUI after boot (post-fs-data.sh sets susfs_active)"
 fi
 
 # set permissions

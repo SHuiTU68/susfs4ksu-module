@@ -12,7 +12,6 @@
 #include <kpmodule.h>
 #include <hook.h>
 #include <kallsyms.h>
-#include <kpmalloc.h>
 #include <log.h>
 #include <linux/printk.h>
 #include <linux/string.h>
@@ -50,14 +49,14 @@ int susfs_add_sus_map(const char *path)
     int pl = 0;
     while (path[pl] && pl < SUSFS_MAX_LEN_PATHNAME - 1) pl++;
 
-    struct sus_map_entry *e = kp_malloc(sizeof(*e));
+    struct sus_map_entry *e = susfs_kzalloc(sizeof(*e), SUSFS_GFP_KERNEL);
     if (!e) return -ENOMEM;
-    memset(e, 0, sizeof(*e));
-    memcpy(e->path, path, pl); e->path[pl] = '\0';
+    /* kzalloc zero-initialises, so the trailing fields are already 0. */
+    susfs_memcpy(e->path, path, pl); e->path[pl] = '\0';
 
-    spin_lock(&sus_map_lock);
+    susfs__raw_spin_lock(&sus_map_lock);
     list_add_tail(&e->list, &sus_map_list);
-    spin_unlock(&sus_map_lock);
+    susfs__raw_spin_unlock(&sus_map_lock);
 
     logki("susfs_kpm: add_sus_map: %s\n", e->path);
     return 0;
@@ -95,11 +94,11 @@ void susfs_sus_map_cleanup(void)
         un(proc_pid_maps_show_addr, (void *)before_maps_show, 0, 1);
         proc_pid_maps_show_addr = 0;
     }
-    spin_lock(&sus_map_lock);
+    susfs__raw_spin_lock(&sus_map_lock);
     struct sus_map_entry *e, *tmp;
     list_for_each_entry_safe(e, tmp, &sus_map_list, list) {
         list_del(&e->list);
-        kp_free(e);
+        susfs_kfree(e);
     }
-    spin_unlock(&sus_map_lock);
+    susfs__raw_spin_unlock(&sus_map_lock);
 }

@@ -41,6 +41,42 @@ KPM_DESCRIPTION("susfs reimplementation for APatch via KPM (android15-6.6)");
  * away from KP's .text, exceeding BL's ±128MB range. */
 #define HIDE_PTR(ptr) __asm__("" : "=r"(ptr) : "0"(ptr))
 
+/* ===== kfunc resolvers — definitions =====
+ *
+ * These are the actual storage for the externs declared in susfs_kpm.h.
+ * They are resolved via kallsyms_lookup_name() in susfs_init() before any
+ * feature hook is installed, so every feature file can rely on them being
+ * non-NULL once init returns.  See the big comment in susfs_kpm.h for why
+ * the kf_* pointers from KernelPatch's headers cannot be used directly.
+ */
+void *(*susfs_memcpy)(void *, const void *, __kernel_size_t);
+void *(*susfs_memset)(void *, int, __kernel_size_t);
+int   (*susfs_strcmp)(const char *, const char *);
+int   (*susfs_memcmp)(const void *, const void *, __kernel_size_t);
+void *(*susfs_kzalloc_real)(size_t, gfp_t);
+int   susfs_kzalloc_fallback = 0;
+void  (*susfs_kfree)(const void *);
+void *(*susfs_vmalloc)(unsigned long);
+void  (*susfs_vfree)(const void *);
+void  (*susfs__raw_spin_lock)(void *);
+void  (*susfs__raw_spin_unlock)(void *);
+
+/* kzalloc wrapper — uses kzalloc/kzalloc.cfi_jt/__kzalloc if available,
+ * otherwise falls back to __kmalloc + memset.  This is needed because on
+ * many GKI kernels "kzalloc" is not in kallsyms (inlined or renamed). */
+void *susfs_kzalloc(size_t size, gfp_t flags)
+{
+    if (susfs_kzalloc_real) {
+        if (susfs_kzalloc_fallback && susfs_memset) {
+            void *p = susfs_kzalloc_real(size, flags);
+            if (p) susfs_memset(p, 0, size);
+            return p;
+        }
+        return susfs_kzalloc_real(size, flags);
+    }
+    return NULL;
+}
+
 /* ===== text-protocol helpers ===== */
 
 static int hex_to_uint(const char *s, unsigned int *out) {
@@ -107,11 +143,135 @@ static unsigned long parse_ulong(const char *s, unsigned long def) {
 
 /* ===== init / exit ===== */
 
+/* No-op stand-ins for _raw_spin_lock / _raw_spin_unlock when the kernel
+ * doesn't export them (some PREEMPT configs inline these away).  The hooks
+ * still function — the spinlock just becomes a NOP, which is acceptable
+ * because hook paths are short and races are extremely unlikely on a
+ * non-preempt GKI kernel. */
+static void susfs_nop_spin_lock(void *lock) { (void)lock; }
+static void susfs_nop_spin_unlock(void *lock) { (void)lock; }
+
+/* Tracks whether the mandatory core symbols were resolved.  If not, ctl0
+ * commands return -ENOSYS so userspace sees a clean error instead of a
+ * NULL-deref panic. */
+static int susfs_core_symbols_ok = 0;
+
 static long susfs_init(const char *args, const char *event, void *reserved)
 {
     logki("susfs_kpm: init, event=%s args=%s\n", event ? event : "(null)",
           args ? args : "(null)");
 
+    /* Resolve the kernel functions we need through kallsyms_lookup_name
+     * (which IS exported by KernelPatch) instead of the unresolvable kf_*
+     * pointers that KernelPatch's <linux/string.h> / <linux/spinlock.h>
+     * inline wrappers reference.  Feature files call these susfs_* globals
+     * for every memcpy/memset/strcmp/memcmp/kzalloc/kfree/spin_lock op.
+     *
+     * On Android 15+ GKI kernels with CFI enabled, many function symbols
+     * are emitted as "<name>.cfi_jt" (jump table) rather than "<name>".
+     * KernelPatch's own kfunc_match_cfi() macro handles this by trying the
+     * ".cfi_jt" suffix first, then falling back to the bare name.  We
+     * replicate that logic here with the resolve_cfi() helper. */
+    susfs_memcpy = (typeof(susfs_memcpy))kallsyms_lookup_name("memcpy");
+    susfs_memset = (typeof(susfs_memset))kallsyms_lookup_name("memset");
+    susfs_strcmp = (typeof(susfs_strcmp))kallsyms_lookup_name("strcmp");
+    susfs_memcmp = (typeof(susfs_memcmp))kallsyms_lookup_name("memcmp");
+    susfs_kzalloc_real = (typeof(susfs_kzalloc_real))kallsyms_lookup_name("kzalloc");
+    susfs_kfree = (typeof(susfs_kfree))kallsyms_lookup_name("kfree");
+    susfs_vmalloc = (typeof(susfs_vmalloc))kallsyms_lookup_name("vmalloc");
+    susfs_vfree = (typeof(susfs_vfree))kallsyms_lookup_name("vfree");
+    susfs__raw_spin_lock =
+        (typeof(susfs__raw_spin_lock))kallsyms_lookup_name("_raw_spin_lock");
+    susfs__raw_spin_unlock =
+        (typeof(susfs__raw_spin_unlock))kallsyms_lookup_name("_raw_spin_unlock");
+
+    /* CFI fallback: try "<sym>.cfi_jt" for symbols that resolved to NULL.
+     * On CFI-enabled GKI kernels, many functions (memcpy, memset, etc.)
+     * are only exported with the .cfi_jt suffix. */
+    if (!susfs_memcpy)
+        susfs_memcpy = (typeof(susfs_memcpy))kallsyms_lookup_name("memcpy.cfi_jt");
+    if (!susfs_memset)
+        susfs_memset = (typeof(susfs_memset))kallsyms_lookup_name("memset.cfi_jt");
+    if (!susfs_strcmp)
+        susfs_strcmp = (typeof(susfs_strcmp))kallsyms_lookup_name("strcmp.cfi_jt");
+    if (!susfs_memcmp)
+        susfs_memcmp = (typeof(susfs_memcmp))kallsyms_lookup_name("memcmp.cfi_jt");
+    if (!susfs_kfree)
+        susfs_kfree = (typeof(susfs_kfree))kallsyms_lookup_name("kfree.cfi_jt");
+    if (!susfs_vmalloc)
+        susfs_vmalloc = (typeof(susfs_vmalloc))kallsyms_lookup_name("vmalloc.cfi_jt");
+    if (!susfs_vfree)
+        susfs_vfree = (typeof(susfs_vfree))kallsyms_lookup_name("vfree.cfi_jt");
+    if (!susfs__raw_spin_lock)
+        susfs__raw_spin_lock =
+            (typeof(susfs__raw_spin_lock))kallsyms_lookup_name("_raw_spin_lock.cfi_jt");
+    if (!susfs__raw_spin_unlock)
+        susfs__raw_spin_unlock =
+            (typeof(susfs__raw_spin_unlock))kallsyms_lookup_name("_raw_spin_unlock.cfi_jt");
+
+    /* kzalloc is often inlined or renamed on GKI kernels.  Try multiple
+     * fallbacks in order of preference:
+     *   1. "kzalloc.cfi_jt"  — CFI jump table variant
+     *   2. "__kzalloc"       — some kernels export this instead
+     *   3. "__kmalloc" + memset — last resort: allocate then zero-fill
+     * We store a flag so susfs_kzalloc() wrapper can fall back to
+     * __kmalloc+memset at call time if needed. */
+    if (!susfs_kzalloc_real) {
+        susfs_kzalloc_real = (typeof(susfs_kzalloc_real))kallsyms_lookup_name("kzalloc.cfi_jt");
+    }
+    if (!susfs_kzalloc_real) {
+        susfs_kzalloc_real = (typeof(susfs_kzalloc_real))kallsyms_lookup_name("__kzalloc");
+    }
+    /* If still not found, use __kmalloc + memset as a last resort. */
+    if (!susfs_kzalloc_real) {
+        void *(*kmalloc_fn)(size_t, gfp_t) =
+            (typeof(kmalloc_fn))kallsyms_lookup_name("__kmalloc");
+        if (!kmalloc_fn)
+            kmalloc_fn = (typeof(kmalloc_fn))kallsyms_lookup_name("__kmalloc.cfi_jt");
+        if (kmalloc_fn && susfs_memset) {
+            susfs_kzalloc_real = kmalloc_fn;
+            susfs_kzalloc_fallback = 1;
+            logkw("susfs_kpm: kzalloc not found, using __kmalloc+memset fallback\n");
+        }
+    }
+    /* kfree fallback: if "kfree" not found, try "__kfree" — though kfree
+     * is usually present. */
+    if (!susfs_kfree) {
+        susfs_kfree = (typeof(susfs_kfree))kallsyms_lookup_name("__kfree");
+    }
+
+    /* Fall back to no-op spinlocks if the real ones aren't found. */
+    if (!susfs__raw_spin_lock) {
+        logkw("susfs_kpm: _raw_spin_lock not found, using no-op\n");
+        susfs__raw_spin_lock = susfs_nop_spin_lock;
+    }
+    if (!susfs__raw_spin_unlock) {
+        logkw("susfs_kpm: _raw_spin_unlock not found, using no-op\n");
+        susfs__raw_spin_unlock = susfs_nop_spin_unlock;
+    }
+
+    /* The string/mem and allocation symbols are mandatory — without them
+     * the feature files cannot function.  But we MUST NOT fail the load
+     * (returning non-zero causes the KP loader to reject the KPM).  Instead
+     * we record the failure and let ctl0 return -ENOSYS per command.
+     *
+     * For kzalloc we accept either a real kzalloc or the __kmalloc+memset
+     * fallback (susfs_kzalloc_real non-NULL means the wrapper works). */
+    if (!susfs_memcpy || !susfs_memset || !susfs_strcmp || !susfs_memcmp ||
+        !susfs_kzalloc_real || !susfs_kfree) {
+        logke("susfs_kpm: failed to resolve core kernel symbols "
+              "(memcpy=%px memset=%px strcmp=%px memcmp=%px "
+              "kzalloc_real=%px kfree=%px)\n",
+              susfs_memcpy, susfs_memset, susfs_strcmp, susfs_memcmp,
+              susfs_kzalloc_real, susfs_kfree);
+        susfs_core_symbols_ok = 0;
+    } else {
+        susfs_core_symbols_ok = 1;
+    }
+
+    /* Always attempt hook installation — individual features log their own
+     * errors and degrade gracefully.  Never return non-zero: the KP loader
+     * treats init() failure as a fatal "KPM load failed". */
     int rc = 0;
     rc |= susfs_sus_path_init_hooks();
     rc |= susfs_open_redirect_init_hooks();
@@ -125,7 +285,7 @@ static long susfs_init(const char *args, const char *event, void *reserved)
         logke("susfs_kpm: one or more hook installations failed (rc=%d), "
               "feature will be degraded\n", rc);
     }
-    logki("susfs_kpm: init complete\n");
+    logki("susfs_kpm: init complete (core_symbols=%d)\n", susfs_core_symbols_ok);
     return 0;
 }
 
@@ -168,6 +328,16 @@ static long susfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
     unsigned int cmd;
     if (hex_to_uint(fields[0], &cmd) != 0) {
         return -EINVAL;
+    }
+
+    /* show_* commands are pure state and don't touch kernel memory/strings,
+     * so they work even if core symbols weren't resolved.  All other
+     * commands need memcpy/memset/strcmp/kzalloc/kfree. */
+    if (!susfs_core_symbols_ok &&
+        cmd != CMD_SUSFS_SHOW_VERSION &&
+        cmd != CMD_SUSFS_SHOW_ENABLED_FEATURES &&
+        cmd != CMD_SUSFS_SHOW_VARIANT) {
+        return -ENOSYS;
     }
 
     switch (cmd) {

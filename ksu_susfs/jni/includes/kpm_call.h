@@ -102,9 +102,11 @@ static inline int kpm_send(unsigned int cmd, const char *fmt, ...)
 }
 
 /* Variant that also retrieves a response string from the KPM (for `show`
- * subcommands).  Returns 0 on success, negative errno on failure. */
+ * subcommands).  Returns 0 on success, negative errno on failure.
+ * Declared variadic (with a trailing `...`) so va_start() is well-formed;
+ * callers that only need the response pass fmt=NULL and no extra args. */
 static inline int kpm_send_recv(unsigned int cmd, const char *fmt,
-                                char *out_msg, long outlen)
+                                char *out_msg, long outlen, ...)
 {
     char buf[2048];
     int off = snprintf(buf, sizeof(buf), "%X", cmd);

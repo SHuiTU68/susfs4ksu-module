@@ -9,6 +9,54 @@
 #ifndef SUSFS_KPM_H
 #define SUSFS_KPM_H
 
+#include <ktypes.h> /* __kernel_size_t, gfp_t, size_t */
+
+/* ===== kfunc resolvers =====
+ *
+ * KernelPatch's <linux/string.h>, <linux/spinlock.h> and <linux/slab.h>
+ * declare memcpy/memset/strcmp/memcmp/spin_lock/kmalloc/kfree etc. as
+ * static-inline wrappers that call the extern function-pointer variables
+ * kf_memcpy, kf_memset, kf_strcmp, kf__raw_spin_lock ... (via the kfunc()
+ * macro in <ksyms.h>).  Those kf_* pointers are never defined inside a KPM
+ * and are NOT in KernelPatch's KP_EXPORT_SYMBOL table, so any reference to
+ * them shows up as "unknown symbol" at load time and the module fails to
+ * load.
+ *
+ * To stay loadable we instead resolve the bare kernel functions through
+ * kallsyms_lookup_name (which IS exported) at KPM init, stash the pointers
+ * in the susfs_* globals below, and call them everywhere instead of the
+ * macro-defined inline wrappers.  -fno-builtin in the Makefile stops clang
+ * from emitting its own memcpy/memset calls for struct copies.
+ *
+ * susfs_kpm.c defines these globals and resolves them in susfs_init().
+ */
+
+/* GFP_KERNEL = __GFP_RECLAIM | __GFP_IO | __GFP_FS = 0xC00|0x40|0x80 = 0xCC0.
+ * <linux/gfp.h> in KernelPatch has the flag defines commented out, so we
+ * hard-code the standard arm64 value here.  kzalloc() zeroes the buffer
+ * internally (it is kmalloc + __GFP_ZERO). */
+#define SUSFS_GFP_KERNEL ((gfp_t)0xCC0u)
+
+extern void *(*susfs_memcpy)(void *, const void *, __kernel_size_t);
+extern void *(*susfs_memset)(void *, int, __kernel_size_t);
+extern int   (*susfs_strcmp)(const char *, const char *);
+extern int   (*susfs_memcmp)(const void *, const void *, __kernel_size_t);
+/* kzalloc is wrapped in a function (not a raw pointer) because on many GKI
+ * kernels "kzalloc" is not exported via kallsyms; we fall back to
+ * __kmalloc + memset.  See susfs_kpm.c:susfs_kzalloc(). */
+extern void *(*susfs_kzalloc_real)(size_t, gfp_t);
+extern int   susfs_kzalloc_fallback;
+void *susfs_kzalloc(size_t size, gfp_t flags);
+extern void  (*susfs_kfree)(const void *);
+extern void *(*susfs_vmalloc)(unsigned long);
+extern void  (*susfs_vfree)(const void *);
+/* _raw_spin_lock / _raw_spin_unlock take raw_spinlock_t *; a spinlock_t *
+ * has identical layout at offset 0, so we pass &lock directly.  Declared
+ * with void * so the call sites compile without depending on <linux/spinlock.h>
+ * being included before this header. */
+extern void (*susfs__raw_spin_lock)(void *);
+extern void (*susfs__raw_spin_unlock)(void *);
+
 /* Command codes — kept identical to upstream susfs so ksu_susfs CLI stays familiar */
 #define CMD_SUSFS_ADD_SUS_PATH              0x55550
 #define CMD_SUSFS_ADD_SUS_PATH_LOOP         0x55553

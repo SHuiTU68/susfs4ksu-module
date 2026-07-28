@@ -17,7 +17,6 @@
 #include <kpmodule.h>
 #include <hook.h>
 #include <kallsyms.h>
-#include <kpmalloc.h>
 #include <log.h>
 #include <linux/printk.h>
 #include <linux/string.h>

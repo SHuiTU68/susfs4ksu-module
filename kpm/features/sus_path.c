@@ -17,7 +17,6 @@
 #include <kpmodule.h>
 #include <hook.h>
 #include <kallsyms.h>
-#include <kpmalloc.h>
 #include <log.h>
 #include <linux/printk.h>
 #include <linux/string.h>
@@ -48,10 +47,10 @@ static int path_matches(const char *target, int target_len,
     if (entry_len > target_len) return 0;
     if (entry_len == target_len) {
         /* exact match requires separator boundary OR exact equality */
-        return !memcmp(target, entry, entry_len);
+        return !susfs_memcmp(target, entry, entry_len);
     }
     /* prefix match: target must be entry/... or entry itself */
-    if (memcmp(target, entry, entry_len)) return 0;
+    if (susfs_memcmp(target, entry, entry_len)) return 0;
     return target[entry_len] == '/';
 }
 
@@ -86,16 +85,16 @@ int susfs_add_sus_path(const char *path, int is_loop)
     while (path[plen] && plen < SUSFS_MAX_LEN_PATHNAME) plen++;
     if (plen >= SUSFS_MAX_LEN_PATHNAME) return -ENAMETOOLONG;
 
-    struct sus_path_entry *e = kp_malloc(sizeof(*e));
+    struct sus_path_entry *e = susfs_kzalloc(sizeof(*e), SUSFS_GFP_KERNEL);
     if (!e) return -ENOMEM;
-    memset(e, 0, sizeof(*e));
-    memcpy(e->path, path, plen);
+    /* kzalloc zero-initialises, so the trailing fields are already 0. */
+    susfs_memcpy(e->path, path, plen);
     e->path[plen] = '\0';
     e->is_loop = is_loop;
 
-    spin_lock(&sus_path_lock);
+    susfs__raw_spin_lock(&sus_path_lock);
     list_add_tail(&e->list, &sus_path_list);
-    spin_unlock(&sus_path_lock);
+    susfs__raw_spin_unlock(&sus_path_lock);
 
     logki("susfs_kpm: add_sus_path%s: %s\n",
           is_loop ? "_loop" : "", e->path);
@@ -150,11 +149,11 @@ void susfs_sus_path_cleanup(void)
         do_filp_open_addr = 0;
     }
 
-    spin_lock(&sus_path_lock);
+    susfs__raw_spin_lock(&sus_path_lock);
     struct sus_path_entry *e, *tmp;
     list_for_each_entry_safe(e, tmp, &sus_path_list, list) {
         list_del(&e->list);
-        kp_free(e);
+        susfs_kfree(e);
     }
-    spin_unlock(&sus_path_lock);
+    susfs__raw_spin_unlock(&sus_path_lock);
 }

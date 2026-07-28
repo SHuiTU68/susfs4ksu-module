@@ -13,7 +13,6 @@
 #include <kpmodule.h>
 #include <hook.h>
 #include <kallsyms.h>
-#include <kpmalloc.h>
 #include <log.h>
 #include <linux/printk.h>
 #include <linux/string.h>
@@ -44,13 +43,15 @@ int susfs_set_cmdline_or_bootconfig(const char *content)
         len++;
 
     if (fake_content) {
-        kp_free(fake_content);
+        susfs_kfree(fake_content);
         fake_content = 0;
         fake_content_len = 0;
     }
-    fake_content = (char *)kp_malloc(len + 1);
+    /* kzalloc zero-initialises, so the buffer is already NUL-terminated
+     * at [len] after we copy the content. */
+    fake_content = (char *)susfs_kzalloc(len + 1, SUSFS_GFP_KERNEL);
     if (!fake_content) return -ENOMEM;
-    memcpy(fake_content, content, len);
+    susfs_memcpy(fake_content, content, len);
     fake_content[len] = '\0';
     fake_content_len = len;
     logki("susfs_kpm: set_cmdline_or_bootconfig: %d bytes\n", len);
@@ -87,7 +88,7 @@ void susfs_set_cmdline_cleanup(void)
         cmdline_read_addr = 0;
     }
     if (fake_content) {
-        kp_free(fake_content);
+        susfs_kfree(fake_content);
         fake_content = 0;
         fake_content_len = 0;
     }

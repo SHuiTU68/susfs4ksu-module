@@ -22,12 +22,39 @@ SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
 [ -w /mnt/vendor ] && mntfolder=/mnt/vendor/susfs4ksu
 mkdir -p $mntfolder
 
-# use the cached enabled_features to check if susfs is supported; if it's empty
-# the binary returned an error, then susfs is not supported
-if [ -n "$susfs_features" ]; then
+# Determine whether the susfs KPM is actually loaded and reachable.
+# ksu_susfs uses "su" as superkey, which only works for su-granted uids.
+# The wrapper script (ksu_susfs) retries via `su -c` on EPERM, so these
+# calls succeed even when launched by apd without an explicit su-grant.
+# A short diagnostic is written for debugging "status: failed" reports.
+diag_file="$tmpfolder/logs/susfs_diag.txt"
+if [ -n "$version" ] || [ -n "$susfs_features" ]; then
 	touch $tmpfolder/logs/susfs_active
-else # check dmesg for susfs indication
-	dmesg | grep -q "susfs:" > /dev/null && touch $tmpfolder/logs/susfs_active || rm -f $tmpfolder/logs/susfs_active
+	{
+		echo "=== susfs4ksu/post-fs-data ==="
+		echo "timestamp: $(date)"
+		echo "status: ACTIVE"
+		echo "version: $version"
+		echo "features: $susfs_features"
+	} > "$diag_file" 2>&1
+else
+	# Legacy fallback: dmesg may show susfs: on kernels with susfs built in.
+	if dmesg 2>/dev/null | grep -q "susfs:"; then
+		touch $tmpfolder/logs/susfs_active
+	else
+		rm -f $tmpfolder/logs/susfs_active
+	fi
+	{
+		echo "=== susfs4ksu/post-fs-data ==="
+		echo "timestamp: $(date)"
+		echo "status: $( [ -f $tmpfolder/logs/susfs_active ] && echo 'ACTIVE (dmesg fallback)' || echo 'FAILED' )"
+		echo "uid: $(id -u)"
+		echo "version_probe: (empty)"
+		echo "features_probe: (empty)"
+		echo "dmesg_susfs: $(dmesg 2>/dev/null | grep -i 'susfs' | head -3)"
+		echo "dmesg_kp: $(dmesg 2>/dev/null | grep -iE 'kernelpatch|kpatch' | head -3)"
+		echo "hint: check that boot image has susfs_kpm embedded and KP is loaded"
+	} > "$diag_file" 2>&1
 fi
 
 # for people that is on legacy with broken dmesg or disabled logging

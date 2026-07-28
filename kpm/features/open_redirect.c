@@ -13,7 +13,6 @@
 #include <kpmodule.h>
 #include <hook.h>
 #include <kallsyms.h>
-#include <kpmalloc.h>
 #include <log.h>
 #include <linux/printk.h>
 #include <linux/string.h>
@@ -68,20 +67,20 @@ int susfs_add_open_redirect(const char *target, const char *redirected,
     if (uid_scheme < UID_NON_APP_PROC || uid_scheme > UID_UMOUNTED_PROC)
         return -EINVAL;
 
-    struct open_redirect_entry *e = kp_malloc(sizeof(*e));
+    struct open_redirect_entry *e = susfs_kzalloc(sizeof(*e), SUSFS_GFP_KERNEL);
     if (!e) return -ENOMEM;
-    memset(e, 0, sizeof(*e));
+    /* kzalloc zero-initialises, so the trailing fields are already 0. */
 
     int tl = 0, rl = 0;
     while (target[tl] && tl < SUSFS_MAX_LEN_PATHNAME - 1) tl++;
     while (redirected[rl] && rl < SUSFS_MAX_LEN_PATHNAME - 1) rl++;
-    memcpy(e->target, target, tl); e->target[tl] = '\0';
-    memcpy(e->redirected, redirected, rl); e->redirected[rl] = '\0';
+    susfs_memcpy(e->target, target, tl); e->target[tl] = '\0';
+    susfs_memcpy(e->redirected, redirected, rl); e->redirected[rl] = '\0';
     e->uid_scheme = uid_scheme;
 
-    spin_lock(&open_redirect_lock);
+    susfs__raw_spin_lock(&open_redirect_lock);
     list_add_tail(&e->list, &open_redirect_list);
-    spin_unlock(&open_redirect_lock);
+    susfs__raw_spin_unlock(&open_redirect_lock);
 
     logki("susfs_kpm: add_open_redirect: %s -> %s (scheme=%d)\n",
           e->target, e->redirected, e->uid_scheme);
@@ -117,11 +116,11 @@ void susfs_open_redirect_cleanup(void)
         un(path_openat_addr, (void *)before_path_openat_or, 0, 1);
         path_openat_addr = 0;
     }
-    spin_lock(&open_redirect_lock);
+    susfs__raw_spin_lock(&open_redirect_lock);
     struct open_redirect_entry *e, *tmp;
     list_for_each_entry_safe(e, tmp, &open_redirect_list, list) {
         list_del(&e->list);
-        kp_free(e);
+        susfs_kfree(e);
     }
-    spin_unlock(&open_redirect_lock);
+    susfs__raw_spin_unlock(&open_redirect_lock);
 }

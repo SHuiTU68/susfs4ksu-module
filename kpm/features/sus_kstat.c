@@ -13,7 +13,6 @@
 #include <kpmodule.h>
 #include <hook.h>
 #include <kallsyms.h>
-#include <kpmalloc.h>
 #include <log.h>
 #include <linux/printk.h>
 #include <linux/string.h>
@@ -71,13 +70,13 @@ int susfs_add_sus_kstat(const char *path, unsigned long target_ino,
 {
     if (!path || !*path) return -EINVAL;
 
-    struct sus_kstat_entry *e = kp_malloc(sizeof(*e));
+    struct sus_kstat_entry *e = susfs_kzalloc(sizeof(*e), SUSFS_GFP_KERNEL);
     if (!e) return -ENOMEM;
-    memset(e, 0, sizeof(*e));
+    /* kzalloc zero-initialises, so the trailing fields are already 0. */
 
     int pl = 0;
     while (path[pl] && pl < SUSFS_MAX_LEN_PATHNAME - 1) pl++;
-    memcpy(e->path, path, pl); e->path[pl] = '\0';
+    susfs_memcpy(e->path, path, pl); e->path[pl] = '\0';
 
     e->target_ino         = target_ino;
     e->spoofed_ino        = spoofed_ino;
@@ -95,9 +94,9 @@ int susfs_add_sus_kstat(const char *path, unsigned long target_ino,
     e->flags              = flags;
     e->is_static          = is_static;
 
-    spin_lock(&sus_kstat_lock);
+    susfs__raw_spin_lock(&sus_kstat_lock);
     list_add_tail(&e->list, &sus_kstat_list);
-    spin_unlock(&sus_kstat_lock);
+    susfs__raw_spin_unlock(&sus_kstat_lock);
 
     logki("susfs_kpm: add_sus_kstat%s: %s ino=%lu\n",
           is_static ? "_statically" : "", e->path, e->target_ino);
@@ -133,11 +132,11 @@ void susfs_sus_kstat_cleanup(void)
         un(vfs_statx_addr, (void *)before_vfs_statx, 0, 1);
         vfs_statx_addr = 0;
     }
-    spin_lock(&sus_kstat_lock);
+    susfs__raw_spin_lock(&sus_kstat_lock);
     struct sus_kstat_entry *e, *tmp;
     list_for_each_entry_safe(e, tmp, &sus_kstat_list, list) {
         list_del(&e->list);
-        kp_free(e);
+        susfs_kfree(e);
     }
-    spin_unlock(&sus_kstat_lock);
+    susfs__raw_spin_unlock(&sus_kstat_lock);
 }

@@ -76,7 +76,7 @@ static void after_uname(hook_fargs1_t *args, void *udata)
 int susfs_set_uname(const char *release, const char *version)
 {
     if (!release || !version) return -EINVAL;
-    if (strcmp(release, "default") != 0) {
+    if (susfs_strcmp(release, "default") != 0) {
         int i = 0;
         while (release[i] && i < __NEW_UTS_LEN) {
             spoof_release[i] = release[i];
@@ -87,7 +87,7 @@ int susfs_set_uname(const char *release, const char *version)
     } else {
         spoof_release_set = 0;
     }
-    if (strcmp(version, "default") != 0) {
+    if (susfs_strcmp(version, "default") != 0) {
         int i = 0;
         while (version[i] && i < __NEW_UTS_LEN) {
             spoof_version[i] = version[i];

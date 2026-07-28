@@ -35,9 +35,32 @@ emulate_vold_app_data=0
 
 # update description
 if [ -f $tmpfolder/logs/susfs_active ] || dmesg | grep -q "susfs:"; then
-		description="description=status: ✅ SuS ඞ"
+		# Detect susfs features this KPM deliberately does NOT implement and
+		# surface them in the WebUI status so users know which capabilities
+		# are unavailable.  Each entry pairs the CONFIG_ name (as emitted by
+		# `ksu_susfs show enabled_features`) with a short display label.
+		unsupported=""
+		for entry in \
+			"CONFIG_KSU_SUSFS_SUS_SU|sus_su" \
+			"CONFIG_KSU_SUSFS_TRY_UMOUNT|try_umount" \
+			"CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT|auto_add_try_umount"; do
+			feat="${entry%%|*}"
+			label="${entry##*|}"
+			if ! echo "$susfs_features" | grep -q "^${feat}$"; then
+				if [ -z "$unsupported" ]; then
+					unsupported="$label"
+				else
+					unsupported="$unsupported, $label"
+				fi
+			fi
+		done
+		if [ -n "$unsupported" ]; then
+			description="description=status: ✅ SuS ඞ | 不支持: $unsupported"
+		else
+			description="description=status: ✅ SuS ඞ"
+		fi
 else
-	description="description=status: failed 💢 - Make sure you're on a SuSFS patched kernel! 😭"
+		description="description=status: failed 💢 - KPM 未加载或 supercall 不通，详见 susfs_diag.txt 😭"
 	touch ${MODDIR}/disable
 fi
 sed -i "s/^description=.*/$description/g" $MODDIR/module.prop
