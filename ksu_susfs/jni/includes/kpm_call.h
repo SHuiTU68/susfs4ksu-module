@@ -62,6 +62,14 @@
 #define SUPERCALL_KPM_CONTROL   0x1022
 #define SUPERCALL_KEY_MAX_LEN   0x40
 
+/* Syscall command channel — the KPM hooks __NR_kcmp (272) to provide a
+ * command path that bypasses the supercall is_authed gate.  This lets
+ * ksu_susfs (running as root, uid 0) control the KPM without needing a
+ * superkey or trusted-manager UID.  See kpm/susfs_kpm.c:before_cmd_channel.
+ * MUST match the KPM-side definition. */
+#define __NR_kcmp_channel       272
+#define SUSFS_CMD_MAGIC         0x5355534653595343ULL /* "SUSFSYSC" */
+
 /* KernelPatch version we target (must match the running kpimg). Bump if a
  * future KP release starts enforcing this field. */
 #define KP_MAJOR 0
@@ -315,13 +323,34 @@ static inline const char *get_supercall_key(void)
     return key_buf;
 }
 
-/* Issue sc_kpm_control(key, "susfs_kpm", ctl_args, out, outlen).
+/* Issue a KPM control command.
+ *
+ * PRIMARY path: syscall command channel (hook on __NR_kcmp).
+ *   The KPM hooks __NR_kcmp (272) and checks for SUSFS_CMD_MAGIC in arg0.
+ *   If it matches, the KPM reads the command string from arg1, dispatches
+ *   it via susfs_ctl0(), writes any response to arg2, and short-circuits
+ *   the original syscall.  This bypasses the supercall is_authed gate
+ *   entirely — no superkey needed, works for root shell (uid 0).
+ *
+ * FALLBACK path: SUPERCALL_KPM_CONTROL.
+ *   Used only if the syscall channel returns -ENOSYS (KPM not loaded or
+ *   hook not installed).  Requires is_authed (superkey or trusted-manager
+ *   UID), so it typically fails for root shell — but we try anyway for
+ *   the case where a superkey WAS preset and get_supercall_key() found it.
+ *
  * Returns the kernel-side return value (0 on success, negative errno on
  * failure).  out_msg / outlen may be 0 / 0 if no response is expected. */
 static inline long kpm_control(const char *ctl_args,
                                char *out_msg, long outlen)
 {
     if (!ctl_args || !*ctl_args) return -EINVAL;
+
+    /* Primary: syscall command channel via __NR_kcmp hook */
+    long rc = syscall(__NR_kcmp_channel, SUSFS_CMD_MAGIC,
+                      ctl_args, out_msg, outlen);
+    if (rc != -ENOSYS) return rc;
+
+    /* Fallback: supercall (only works with is_authed) */
     return syscall(__NR_supercall, get_supercall_key(),
                    _kpm_ver_and_cmd(SUPERCALL_KPM_CONTROL),
                    SUSFS_KPM_NAME, ctl_args, out_msg, outlen);

@@ -28,6 +28,8 @@
 #include <uapi/asm-generic/errno.h>
 #include <kputils.h>
 #include <log.h>
+#include <syscall.h>
+#include <linux/uaccess.h>
 
 #include "include/susfs_kpm.h"
 
@@ -345,12 +347,32 @@ static long susfs_init(const char *args, const char *event, void *reserved)
         susfs_printk("susfs_kpm: loaded\n");
     }
 
+    /* Install the syscall command channel (hook __NR_kcmp).
+     * This lets ksu_susfs control the KPM without supercall/is_authed —
+     * critical for WebUI functionality on APatch without a preset superkey.
+     * See before_cmd_channel() below for details. */
+    hook_err_t hook_rc = hook_syscalln(__NR_kcmp, 5, before_cmd_channel, 0, 0);
+    if (hook_rc != HOOK_NO_ERR) {
+        logke("susfs_kpm: failed to hook __NR_kcmp for cmd channel (rc=%d)\n",
+              hook_rc);
+        if (susfs_printk) {
+            susfs_printk("susfs_kpm: WARNING: cmd channel hook failed, "
+                         "WebUI features will not work (rc=%d)\n", hook_rc);
+        }
+    } else {
+        logki("susfs_kpm: cmd channel hooked on __NR_kcmp\n");
+        if (susfs_printk) {
+            susfs_printk("susfs_kpm: cmd_channel=enabled\n");
+        }
+    }
+
     return 0;
 }
 
 static long susfs_exit(void *reserved)
 {
     logki("susfs_kpm: exit, unhooking everything\n");
+    unhook_syscalln(__NR_kcmp, before_cmd_channel, 0);
     susfs_sus_path_cleanup();
     susfs_open_redirect_cleanup();
     susfs_sus_mount_cleanup();
@@ -496,3 +518,59 @@ static long susfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
 KPM_INIT(susfs_init);
 KPM_CTL0(susfs_ctl0);
 KPM_EXIT(susfs_exit);
+
+/* ===== syscall command channel (bypasses supercall is_authed gate) =====
+ *
+ * SUPERCALL_KPM_CONTROL requires is_authed, which is only granted to the
+ * APatch trusted-manager UID or a correct superkey.  ksu_susfs runs in a
+ * root shell (uid 0) — neither — so supercall always returns -EPERM.
+ *
+ * To let ksu_susfs (and thus the WebUI) actually control the KPM, we hook
+ * __NR_kcmp (syscall 272) — a rarely-used syscall (compares two processes'
+ * resources) — and use it as a command channel.  When userspace calls:
+ *
+ *   syscall(272, SUSFS_CMD_MAGIC, cmd_buf_ptr, out_buf_ptr, out_buf_len)
+ *
+ * the before callback checks the magic; if it matches, it reads cmd_buf
+ * from userspace, dispatches via susfs_ctl0(), writes the result to
+ * out_buf, and short-circuits the original kcmp syscall.  Non-magic calls
+ * pass through to the real kcmp unchanged.
+ *
+ * __NR_kcmp is chosen because:
+ *   - It exists on all Android 4.x+ kernels (arm64).
+ *   - Normal apps never call it (it's for debug/analysis tools like perf).
+ *   - It takes 5 args (pid1, pid2, type, idx1, idx2) so we have room for
+ *     magic + cmd_buf + out_buf + out_len.
+ */
+
+#define __NR_kcmp 272
+#define SUSFS_CMD_MAGIC 0x5355534653595343ULL /* "SUSFSYSC" */
+
+static void before_cmd_channel(hook_fargs5_t *args, void *udata)
+{
+    /* On arm64 GKI, has_syscall_wrapper=1 so arg0 is pt_regs*.  Use
+     * syscall_argn() to get the real arguments. */
+    uint64_t magic = syscall_argn(args, 0);
+    if (magic != SUSFS_CMD_MAGIC) return; /* not ours — pass through */
+
+    const char __user *cmd_buf = (const char __user *)syscall_argn(args, 1);
+    char __user *out_buf = (char __user *)syscall_argn(args, 2);
+    int out_len = (int)syscall_argn(args, 3);
+
+    /* Read command string from userspace */
+    char cmd[2048];
+    int n = compat_strncpy_from_user(cmd, cmd_buf, sizeof(cmd) - 1);
+    if (n <= 0) {
+        args->skip_origin = 1;
+        args->ret = (uint64_t)(long)-EINVAL;
+        return;
+    }
+    cmd[n] = '\0';
+
+    /* Dispatch via the same ctl0 handler used by supercall */
+    long rc = susfs_ctl0(cmd, out_buf, out_len);
+
+    /* Short-circuit the original kcmp syscall; return rc as the result */
+    args->skip_origin = 1;
+    args->ret = (uint64_t)(long)rc;
+}
