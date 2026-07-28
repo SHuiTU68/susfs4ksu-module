@@ -16,11 +16,28 @@
  * pass the real superkey.  SU-allowed UIDs (including root) only get
  * is_trusted_caller, which is NOT enough for KPM_CONTROL.
  *
- * The superkey is not stored in any file — apd receives it via its
- * `--superkey`/`-k` command-line argument.  Since ksu_susfs runs as root,
- * it can read `/proc/<apd_pid>/cmdline` to extract the real superkey.
- * get_supercall_key() does exactly this, falling back to "su" (which works
- * only on KP configs where no superkey has been preset) if apd is not found.
+ * The superkey is NOT stored in any file.  APatch app itself uses "su" as
+ * its superKey (hardcoded in APatchApp.kt:271) because it runs as the
+ * trusted-manager UID and gets is_authed automatically.  But ksu_susfs runs
+ * in a root shell (uid 0) — NOT the trusted manager — so "su" doesn't work
+ * for KPM_CONTROL.
+ *
+ * To obtain the real superkey we try, in order:
+ *   1. kptools -l -i <boot_partition>  (APatch ships kptools at
+ *      /data/adb/ap/bin/kptools; it prints "superkey=<plaintext>")
+ *   2. Scan the active boot partition for the "KP1158" magic and read the
+ *      superkey field at offset 0xE8 from the magic (preset layout from
+ *      KernelPatch/kernel/include/preset.h).
+ *   3. Read /proc/<apd_pid>/cmdline looking for -s/--superkey <KEY> — this
+ *      only works during the brief boot window when the stage apd (post-fs-
+ *      data / services / boot-completed) is still running; the persistent
+ *      `apd uid-listener` does NOT carry the key.
+ *   4. Fall back to "su" (works only when no superkey has been preset).
+ *
+ * Note: methods 1-2 only work when kpimg was patched with `-s <key>` (the
+ * common APatch case).  If `-S <root_skey>` was used, the preset contains
+ * only a SHA256 hash and the real key is generated randomly at boot — in
+ * that case all three extraction methods fail and we fall back to "su".
  *
  * Note on version_code: as of KernelPatch 0.13.x the kernel does NOT enforce
  * the version_code field (it's parsed but unused — see kernel/patch/common/
@@ -53,21 +70,182 @@
 /* Module name registered by the KPM (must match KPM_NAME in susfs_kpm.c) */
 #define SUSFS_KPM_NAME "susfs_kpm"
 
+/* KP preset magic and superkey offset (see KernelPatch/kernel/include/preset.h).
+ * superkey[64] sits at offset 0xE8 from the start of the "KP1158" magic. */
+#define KP_MAGIC                "KP1158"
+#define KP_MAGIC_LEN            8
+#define KP_SUPERKEY_OFFSET      0xE8
+
 static inline long _kpm_ver_and_cmd(long cmd)
 {
     unsigned int version_code = (KP_MAJOR << 16) + (KP_MINOR << 8) + KP_PATCH;
     return ((long)version_code << 32) | (0x1158L << 16) | (cmd & 0xFFFF);
 }
 
-/* Auto-detect the superkey from apd's process cmdline.
+/* Try to extract the superkey from apd's process cmdline.
+ * Only stage apd processes (post-fs-data/services/boot-completed) carry
+ * -s <key>; the persistent uid-listener does not.  Returns 0 on success. */
+static inline int _try_key_from_apd_cmdline(char *out, size_t outlen)
+{
+    FILE *fp = popen("pidof apd 2>/dev/null", "r");
+    if (!fp) return -1;
+    char pid_str[32];
+    if (!fgets(pid_str, sizeof(pid_str), fp)) { pclose(fp); return -1; }
+    pclose(fp);
+    pid_str[strcspn(pid_str, " \n")] = '\0';
+    if (!pid_str[0]) return -1;
+
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%s/cmdline", pid_str);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    char buf[4096];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    buf[n] = '\0';
+
+    char *p = buf;
+    char *end = buf + n;
+    while (p < end) {
+        size_t len = strnlen(p, (size_t)(end - p));
+        if (len == 0) break;
+        if ((strcmp(p, "--superkey") == 0 || strcmp(p, "-k") == 0 ||
+             strcmp(p, "-s") == 0) && len + 1 < (size_t)(end - p)) {
+            char *val = p + len + 1;
+            if (val[0] && strcmp(val, "su") != 0) {
+                strncpy(out, val, outlen - 1);
+                out[outlen - 1] = '\0';
+                return 0;
+            }
+        }
+        p += len + 1;
+    }
+    return -1;
+}
+
+/* Try to extract the superkey by running kptools on the active boot slot.
+ * kptools -l -i <image> prints "superkey=<plaintext>" to stdout. */
+static inline int _try_key_from_kptools(char *out, size_t outlen)
+{
+    /* kptools is shipped by APatch at /data/adb/ap/bin/kptools */
+    const char *kptools = "/data/adb/ap/bin/kptools";
+    if (access(kptools, X_OK) != 0) return -1;
+
+    /* Determine the active boot partition (A/B or legacy) */
+    FILE *fp = popen(
+        "slot=$(getprop ro.boot.slot_suffix 2>/dev/null); "
+        "if [ -n \"$slot\" ]; then "
+        "  p=/dev/block/by-name/boot$slot; "
+        "else "
+        "  p=/dev/block/by-name/boot; "
+        "fi; "
+        "[ -b \"$p\" ] && echo \"$p\"",
+        "r");
+    if (!fp) return -1;
+    char part[128];
+    if (!fgets(part, sizeof(part), fp)) { pclose(fp); return -1; }
+    pclose(fp);
+    part[strcspn(part, "\n")] = '\0';
+    if (!part[0]) return -1;
+
+    /* Run kptools and parse "superkey=<value>" */
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s -l -i %s 2>/dev/null", kptools, part);
+    fp = popen(cmd, "r");
+    if (!fp) return -1;
+    char line[512];
+    int found = -1;
+    while (fgets(line, sizeof(line), fp)) {
+        const char *prefix = "superkey=";
+        size_t plen = strlen(prefix);
+        if (strncmp(line, prefix, plen) == 0) {
+            char *val = line + plen;
+            /* trim trailing whitespace */
+            val[strcspn(val, "\r\n")] = '\0';
+            if (val[0] && strcmp(val, "su") != 0) {
+                strncpy(out, val, outlen - 1);
+                out[outlen - 1] = '\0';
+                found = 0;
+                break;
+            }
+        }
+    }
+    pclose(fp);
+    return found;
+}
+
+/* Try to extract the superkey by scanning the boot partition for the
+ * "KP1158" magic and reading the superkey field at offset 0xE8. */
+static inline int _try_key_from_boot_scan(char *out, size_t outlen)
+{
+    /* Determine the active boot partition */
+    FILE *fp = popen(
+        "slot=$(getprop ro.boot.slot_suffix 2>/dev/null); "
+        "if [ -n \"$slot\" ]; then "
+        "  p=/dev/block/by-name/boot$slot; "
+        "else "
+        "  p=/dev/block/by-name/boot; "
+        "fi; "
+        "[ -b \"$p\" ] && echo \"$p\"",
+        "r");
+    if (!fp) return -1;
+    char part[128];
+    if (!fgets(part, sizeof(part), fp)) { pclose(fp); return -1; }
+    pclose(fp);
+    part[strcspn(part, "\n")] = '\0';
+    if (!part[0]) return -1;
+
+    int fd = open(part, O_RDONLY);
+    if (fd < 0) return -1;
+
+    /* Scan in 1MB chunks with overlap for magic straddling boundaries.
+     * The kernel image is typically 16-64MB; we cap at 128MB to avoid
+     * scanning forever on huge images. */
+    char chunk[1024 * 1024 + KP_MAGIC_LEN];
+    off_t pos = 0;
+    int found = -1;
+    while (pos < 128L * 1024 * 1024) {
+        ssize_t n = pread(fd, chunk, sizeof(chunk), pos);
+        if (n <= 0) break;
+        /* Search for KP_MAGIC in this chunk */
+        void *hit = memmem(chunk, (size_t)n, KP_MAGIC, KP_MAGIC_LEN);
+        if (hit) {
+            /* Offset of magic within the file */
+            off_t magic_off = pos + (off_t)((char *)hit - chunk);
+            /* Read superkey at magic_off + KP_SUPERKEY_OFFSET */
+            char key[SUPERCALL_KEY_MAX_LEN];
+            ssize_t kr = pread(fd, key, sizeof(key) - 1,
+                               magic_off + KP_SUPERKEY_OFFSET);
+            if (kr > 0) {
+                key[kr] = '\0';
+                /* Ensure null-terminated (preset field is 64 bytes) */
+                key[sizeof(key) - 1] = '\0';
+                if (key[0] && strcmp(key, "su") != 0) {
+                    strncpy(out, key, outlen - 1);
+                    out[outlen - 1] = '\0';
+                    found = 0;
+                    break;
+                }
+            }
+        }
+        /* Advance, leaving overlap in case magic straddles boundary */
+        pos += n - KP_MAGIC_LEN;
+        if (pos < 0) pos = 0;
+    }
+    close(fd);
+    return found;
+}
+
+/* Auto-detect the superkey using multiple extraction strategies.
  *
- * apd is started by APatch's init scripts with `apd --superkey <KEY> ...`
- * (or `-k <KEY>`).  The superkey is not persisted to any file, but it IS
- * visible in /proc/<apd_pid>/cmdline as a null-separated argument list.
- * ksu_susfs runs as root, so it can read that file.
+ * Tries, in order:
+ *   1. kptools -l on the active boot partition
+ *   2. Raw scan of the boot partition for KP_MAGIC + superkey offset
+ *   3. apd cmdline (only works during early boot stages)
+ *   4. Fallback to "su" (works only when no superkey has been preset)
  *
- * Returns a pointer to a static buffer containing the key, or "su" as a
- * fallback (which only works when no superkey has been preset in KP). */
+ * Returns a pointer to a static buffer containing the key. */
 static inline const char *get_supercall_key(void)
 {
     static char key_buf[SUPERCALL_KEY_MAX_LEN];
@@ -78,43 +256,24 @@ static inline const char *get_supercall_key(void)
     /* Default fallback */
     strcpy(key_buf, "su");
 
-    /* Get apd's PID via pidof (returns space-separated PIDs, take first) */
-    FILE *fp = popen("pidof apd 2>/dev/null", "r");
-    if (!fp) return key_buf;
-    char pid_str[32];
-    if (!fgets(pid_str, sizeof(pid_str), fp)) { pclose(fp); return key_buf; }
-    pclose(fp);
-    pid_str[strcspn(pid_str, " \n")] = '\0';
-    if (!pid_str[0]) return key_buf;
+    /* Strategy 1: kptools (most reliable, but requires the binary) */
+    if (_try_key_from_kptools(key_buf, sizeof(key_buf)) == 0)
+        return key_buf;
 
-    /* Read /proc/<pid>/cmdline — null-separated argv */
-    char path[64];
-    snprintf(path, sizeof(path), "/proc/%s/cmdline", pid_str);
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return key_buf;
-    char buf[4096];
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    if (n <= 0) return key_buf;
-    buf[n] = '\0';
+    /* Reset to "su" in case kptools partially wrote */
+    strcpy(key_buf, "su");
 
-    /* Walk null-separated args looking for --superkey <KEY> or -k <KEY> */
-    char *p = buf;
-    char *end = buf + n;
-    while (p < end) {
-        size_t len = strnlen(p, (size_t)(end - p));
-        if (len == 0) break;
-        if (strcmp(p, "--superkey") == 0 || strcmp(p, "-k") == 0) {
-            char *val = p + len + 1;
-            if (val < end && val[0]) {
-                strncpy(key_buf, val, sizeof(key_buf) - 1);
-                key_buf[sizeof(key_buf) - 1] = '\0';
-                break;
-            }
-        }
-        p += len + 1;
-    }
+    /* Strategy 2: scan boot partition for KP magic */
+    if (_try_key_from_boot_scan(key_buf, sizeof(key_buf)) == 0)
+        return key_buf;
 
+    strcpy(key_buf, "su");
+
+    /* Strategy 3: apd cmdline (only works during boot stages) */
+    if (_try_key_from_apd_cmdline(key_buf, sizeof(key_buf)) == 0)
+        return key_buf;
+
+    /* Strategy 4: fallback to "su" (already in key_buf) */
     return key_buf;
 }
 

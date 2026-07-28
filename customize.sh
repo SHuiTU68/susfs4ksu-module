@@ -65,17 +65,19 @@ susfs4ksu_config_check() {
 }
 
 # ---- Install userspace binary (with su-fallback wrapper) ----
-# The real binary (ksu_susfs_real) auto-detects the superkey by reading
-# /proc/<apd_pid>/cmdline (where apd's --superkey arg is visible to root).
+# The real binary (ksu_susfs_real) auto-detects the superkey via multiple
+# strategies (see kpm_call.h:get_supercall_key()):
+#   1. kptools -l on the active boot partition
+#   2. Raw scan of boot partition for "KP1158" magic + superkey at offset 0xE8
+#   3. apd cmdline (-s <key> during boot stages only)
+#   4. Fallback to "su" (works only when no superkey was preset)
 # This is necessary because SUPERCALL_KPM_CONTROL requires is_authed, which
 # is granted only by a correct superkey or by being the trusted-manager UID
-# (APK signature match) — SU-allowed UIDs only get is_trusted_caller and are
-# blocked at the KPM_CONTROL gate.
+# (APK signature match).  ksu_susfs runs in a root shell (uid 0), NOT as the
+# trusted manager, so it must supply the real superkey.
 #
 # The wrapper retries via `su -c` when the real binary returns EPERM (255),
-# which can happen if apd is not yet running (e.g. during module install).
-# Once apd is up, the real binary resolves the superkey itself and succeeds
-# on the first try.
+# which can happen if boot partition is unreadable or kptools is missing.
 ui_print "[-] Installing ksu_susfs userspace tool"
 chmod +x "${TMPDIR}/susfs/tools/ksu_susfs_arm64"
 cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs_real
@@ -83,13 +85,13 @@ chmod 755 ${DEST_BIN_DIR}/ksu_susfs_real
 cat > ${DEST_BIN_DIR}/ksu_susfs <<'WRAPPER'
 #!/system/bin/sh
 # ksu_susfs wrapper — retries via APatch su when supercall is rejected.
-# ksu_susfs_real auto-detects the superkey from apd's cmdline; the su -c
-# retry is only needed when apd is not yet running (e.g. during install).
+# ksu_susfs_real auto-detects the superkey from the boot partition (kptools
+# or raw KP1158 scan) or apd cmdline; the su -c retry is a last resort.
 REAL=/data/adb/ap/bin/ksu_susfs_real
 [ -x "$REAL" ] || exit 127
 "$REAL" "$@"
 rc=$?
-# 255 = -1 = EPERM: supercall rejected (apd not running / key not found).
+# 255 = -1 = EPERM: supercall rejected (key extraction failed).
 if [ $rc -eq 255 ] && command -v su >/dev/null 2>&1; then
 	exec su -c "exec '$REAL' $(printf "'%s' " "$@")" 2>/dev/null
 fi
