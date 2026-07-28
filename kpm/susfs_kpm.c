@@ -60,6 +60,7 @@ void *(*susfs_vmalloc)(unsigned long);
 void  (*susfs_vfree)(const void *);
 void  (*susfs__raw_spin_lock)(void *);
 void  (*susfs__raw_spin_unlock)(void *);
+int (*susfs_printk)(const char *fmt, ...);
 
 /* kzalloc wrapper — uses kzalloc/kzalloc.cfi_jt/__kzalloc if available,
  * otherwise falls back to __kmalloc + memset.  This is needed because on
@@ -250,6 +251,24 @@ static long susfs_init(const char *args, const char *event, void *reserved)
         susfs__raw_spin_unlock = susfs_nop_spin_unlock;
     }
 
+    /* Resolve printk so we can write to the regular kernel log buffer
+     * (dmesg).  logki/log_boot only reach KernelPatch's internal boot log,
+     * which userspace cannot read without an authed SUPERCALL_BOOTLOG —
+     * and the ksu_susfs CLI can't auth for KPM_CONTROL either (it passes
+     * "su" as the superkey, which doesn't match the real preset superkey).
+     * By printk-ing "susfs_kpm: loaded ..." at init, the module's
+     * post-fs-data.sh / boot-completed.sh can detect the KPM via
+     * `dmesg | grep susfs_kpm` without any supercall.  Try the bare name,
+     * the .cfi_jt CFI jump-table variant, and the _printk rename used on
+     * kernels that reworked the printk export. */
+    susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("printk");
+    if (!susfs_printk)
+        susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("printk.cfi_jt");
+    if (!susfs_printk)
+        susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("_printk");
+    if (!susfs_printk)
+        susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("_printk.cfi_jt");
+
     /* The string/mem and allocation symbols are mandatory — without them
      * the feature files cannot function.  But we MUST NOT fail the load
      * (returning non-zero causes the KP loader to reject the KPM).  Instead
@@ -286,6 +305,16 @@ static long susfs_init(const char *args, const char *event, void *reserved)
               "feature will be degraded\n", rc);
     }
     logki("susfs_kpm: init complete (core_symbols=%d)\n", susfs_core_symbols_ok);
+
+    /* Emit a line to the regular kernel log (dmesg) so userspace can
+     * detect the KPM without an authed SUPERCALL_KPM_CONTROL.  The module
+     * scripts grep for "susfs_kpm" in dmesg to set the susfs_active flag.
+     * logki above only reaches KP's internal boot log, not dmesg. */
+    if (susfs_printk) {
+        susfs_printk("susfs_kpm: loaded version=%s variant=%s core_symbols=%d\n",
+                     SUSFS_KPM_VERSION, SUSFS_KPM_VARIANT, susfs_core_symbols_ok);
+    }
+
     return 0;
 }
 

@@ -54,8 +54,15 @@ extern void  (*susfs_vfree)(const void *);
  * has identical layout at offset 0, so we pass &lock directly.  Declared
  * with void * so the call sites compile without depending on <linux/spinlock.h>
  * being included before this header. */
-extern void (*susfs__raw_spin_lock)(void *);
+extern void  (*susfs__raw_spin_lock)(void *);
 extern void (*susfs__raw_spin_unlock)(void *);
+
+/* printk — resolved like the other kfunc pointers so the KPM can write to
+ * the regular kernel log buffer (dmesg).  logki/log_boot only reach KP's
+ * internal boot log, which userspace cannot read without an authed
+ * SUPERCALL_BOOTLOG; printk lets post-fs-data.sh / boot-completed.sh
+ * detect the KPM via `dmesg | grep susfs_kpm`. */
+extern int (*susfs_printk)(const char *fmt, ...);
 
 /* Command codes — kept identical to upstream susfs so ksu_susfs CLI stays familiar */
 #define CMD_SUSFS_ADD_SUS_PATH              0x55550

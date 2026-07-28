@@ -39,7 +39,9 @@ if [ -n "$version" ] || [ -n "$susfs_features" ]; then
 	} > "$diag_file" 2>&1
 else
 	# Legacy fallback: dmesg may show susfs: on kernels with susfs built in.
-	if dmesg 2>/dev/null | grep -q "susfs:"; then
+	# The susfs_kpm KPM also printk's "susfs_kpm: loaded ..." at init so it
+	# shows up here without needing an authed SUPERCALL_KPM_CONTROL probe.
+	if dmesg 2>/dev/null | grep -qE "susfs:|susfs_kpm:"; then
 		touch $tmpfolder/logs/susfs_active
 	else
 		rm -f $tmpfolder/logs/susfs_active
@@ -51,7 +53,7 @@ else
 		echo "uid: $(id -u)"
 		echo "version_probe: (empty)"
 		echo "features_probe: (empty)"
-		echo "dmesg_susfs: $(dmesg 2>/dev/null | grep -i 'susfs' | head -3)"
+		echo "dmesg_susfs: $(dmesg 2>/dev/null | grep -iE 'susfs|susfs_kpm' | head -3)"
 		echo "dmesg_kp: $(dmesg 2>/dev/null | grep -iE 'kernelpatch|kpatch' | head -3)"
 		echo "hint: check that boot image has susfs_kpm embedded and KP is loaded"
 	} > "$diag_file" 2>&1
@@ -138,6 +140,6 @@ fi
 
 # SUSFS Logging
 dmesg_snapshot=$(dmesg)
-echo "$dmesg_snapshot" | grep -iE "susfs_auto_add|ksu_susfs|susfs:" > $logfile
+echo "$dmesg_snapshot" | grep -iE "susfs_auto_add|ksu_susfs|susfs_kpm|susfs:" > $logfile
 endmsg=$(echo "$dmesg_snapshot" | grep -E '^\[ *[0-9]' | cut -d']' -f1 | sed 's/^\[ *//' | cut -d' ' -f1 | tail -n 1)
 echo "post_fs_data=$endmsg" > $tmpfolder/logs/boot_stage_time.sh

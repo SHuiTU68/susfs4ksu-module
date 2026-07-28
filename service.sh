@@ -106,7 +106,10 @@ sus_su_2(){
 
 # SUSFS Logging
 dmesg_snapshot=$(dmesg)
-echo "$dmesg_snapshot" | sed -n "/^\[ *$post_mount/,\$p" | grep -iE "susfs_auto_add|ksu_susfs|susfs:" >> $logfile
+# Include "susfs_kpm:" so the KPM's init printk (susfs_kpm: loaded ...) is
+# captured here too.  See post-fs-data.sh / boot-completed.sh for why dmesg
+# is the reliable channel when SUPERCALL_KPM_CONTROL is unreachable.
+echo "$dmesg_snapshot" | sed -n "/^\[ *$post_mount/,\$p" | grep -iE "susfs_auto_add|ksu_susfs|susfs:|susfs_kpm:" >> $logfile
 endmsg=$(echo "$dmesg_snapshot" | grep -E '^\[ *[0-9]' | cut -d']' -f1 | sed 's/^\[ *//' | cut -d' ' -f1 | tail -n 1)
 echo "service=$endmsg" >> $tmpfolder/logs/boot_stage_time.sh
 
