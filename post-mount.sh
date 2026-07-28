@@ -14,9 +14,19 @@ logfile1="$tmpfolder/logs/susfs1.log"
 post_fs_data=0
 [ -f $tmpfolder/logs/boot_stage_time.sh ] && . $tmpfolder/logs/boot_stage_time.sh
 
+# auto-hide toggles (written by the WebUI into config.sh).  Defaults here
+# keep the script safe when config.sh hasn't been populated yet.
+auto_mount=0
+auto_bind=0
+auto_umount_bind=0
+auto_try_umount=0
+force_hide_lsposed=0
+[ -f $PERSISTENT_DIR/config.sh ] && . $PERSISTENT_DIR/config.sh
+
 # Feature list from the KPM — needed to guard calls to features this KPM
-# does NOT implement (try_umount, sus_su, auto_add_try_umount).  When the
-# feature is absent we skip the call instead of letting ksu_susfs fail.
+# does NOT implement (sus_su).  try_umount / auto_add_try_umount ARE now
+# supported via a hybrid approach (KPM records the list, this script does
+# the actual `umount -l` in the init mount namespace).
 susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null)
 
 # to add mounts
@@ -31,21 +41,74 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
     fi
 fi
 
-# Check and process try_umount paths
-# try_umount is NOT implemented in this KPM — the grep guard skips the call
-# silently.  (On susfs v2.0+ kernels with a patched apd, the fallback to
-# `apd kernel umount add` would go here, but stock apd has no such command.)
+# ===== try_umount — the "another way" for APatch =====
+# Upstream susfs detaches the vfsmount in-kernel; this KPM can't do that
+# safely (no struct mount internals).  Instead we use a hybrid approach:
+#   1. Tell the KPM about the path (add_try_umount) so it can hide it from
+#      /proc/mounts for non-su readers via the show_mountinfo hook.
+#   2. Actually detach the mount HERE via `umount -l` in the init mount
+#      namespace, which zygote-spawned apps inherit.  This is the real
+#      "sus mount hiding" effect.
+# This runs in post-mount (late_start service) so the mounts are already
+# up; `umount -l` (lazy) avoids EBUSY from open files.
 if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
+    # (a) Explicit paths from try_umount.txt
     if grep -v "#" "$PERSISTENT_DIR/try_umount.txt" > /dev/null; then
         grep -v "#" "$PERSISTENT_DIR/try_umount.txt" | while read -r i; do
-            [ -z "$i" ] || { ${SUSFS_BIN} add_try_umount "$i" 1 && echo "[try_umount]: susfs4ksu/post-mount $i" >> "$logfile1"; }
+            [ -z "$i" ] && continue
+            ${SUSFS_BIN} add_try_umount "$i" 1 2>/dev/null
+            umount -l "$i" 2>/dev/null && echo "[try_umount]: susfs4ksu/post-mount umount $i" >> "$logfile1"
+        done
+    fi
+    # (b) Auto-detect suspicious bind mounts when the WebUI toggle is on.
+    #     We look for mounts whose source is under the module/APatch data
+    #     dirs — these are the overlay/bind mounts root managers create.
+    if [ "$auto_bind" = "1" ] || [ "$auto_umount_bind" = "1" ] || [ "$auto_try_umount" = "1" ]; then
+        echo "[auto_try_umount]: scanning /proc/mounts for suspicious bind mounts" >> "$logfile1"
+        # Mark the KPM advisory flag so the toggle state is recorded.
+        ${SUSFS_BIN} auto_add_try_umount_for_bind_mount 2>/dev/null
+        # Common module/manager mount roots that should be hidden from apps.
+        for suspect in \
+            /data/adb/modules \
+            /data/adb/ap \
+            /data/adb/ksu \
+            /debug_ramdisk \
+            /sbin
+        do
+            grep -v "#" "$PERSISTENT_DIR/try_umount.txt" 2>/dev/null | grep -q "^${suspect}\$" && continue
+            # Find mount points whose source contains the suspect root.
+            awk -v s="$suspect" '$1 ~ s {print $2}' /proc/mounts 2>/dev/null | while read -r mp; do
+                [ -z "$mp" ] && continue
+                case "$mp" in
+                    /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
+                esac
+                ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null
+                umount -l "$mp" 2>/dev/null && echo "[auto_try_umount]: umount $mp" >> "$logfile1"
+            done
         done
     fi
 fi
 
+# force_hide_lsposed — detach LSPosed's dex2oat overlay mounts so the stock
+# binary is used.  post-fs-data.sh already registered them via add_try_umount
+# (KPM records for /proc/mounts filtering); here we actually umount them now
+# that the apex mounts are up.
+if [ "$force_hide_lsposed" = "1" ] && echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
+    for dex2oat in \
+        /system/apex/com.android.art/bin/dex2oat \
+        /system/apex/com.android.art/bin/dex2oat32 \
+        /system/apex/com.android.art/bin/dex2oat64 \
+        /apex/com.android.art/bin/dex2oat \
+        /apex/com.android.art/bin/dex2oat32 \
+        /apex/com.android.art/bin/dex2oat64
+    do
+        umount -l "$dex2oat" 2>/dev/null && echo "[force_hide_lsposed]: umount $dex2oat" >> "$logfile1"
+    done
+fi
+
 # SUSFS Logging
 dmesg_snapshot=$(dmesg)
-echo "$dmesg_snapshot" | sed -n "/^\[ *$post_fs_data/,\$p" | grep -iE "susfs_auto_add|ksu_susfs|susfs:" >> $logfile
+echo "$dmesg_snapshot" | sed -n "/^\[ *$post_fs_data/,\$p" | grep -iE "susfs_auto_add|ksu_susfs|susfs:|susfs_kpm:" >> $logfile
 endmsg=$(echo "$dmesg_snapshot" | grep -E '^\[ *[0-9]' | cut -d']' -f1 | sed 's/^\[ *//' | cut -d' ' -f1 | tail -n 1)
 echo "post_mount=$endmsg" >> $tmpfolder/logs/boot_stage_time.sh
 # EOF

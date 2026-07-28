@@ -98,7 +98,7 @@
   <string id="hide_gapps_label">Ocultar GApps</string>
   <string id="hide_revanced_label">Ocultar ReVanced</string>
   <string id="spoof_cmdline_label">Suplantar Línea de Comandos</string>
-  <string id="hide_ksu_loop_label">Ocultar Bucle KSU</string>
+  <string id="hide_ksu_loop_label">Ocultar Bucle AP</string>
   <string id="force_hide_dex2oat_label">Forzar Ocultación de Dex2oat</string>
   <string id="avc_log_spoofing_label">AVC Log Spoofing</string>
   <string id="emulate_vold_app_data_label">Emulate Vold App Data Isolation</string>

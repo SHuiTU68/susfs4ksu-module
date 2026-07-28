@@ -98,7 +98,7 @@
   <string id="hide_gapps_label">隱藏 GApps</string>
   <string id="hide_revanced_label">隱藏 Revanced (YT/YTM)</string>
   <string id="spoof_cmdline_label">偽裝 Cmdline</string>
-  <string id="hide_ksu_loop_label">隱藏 KSU 迴圈掛載</string>
+  <string id="hide_ksu_loop_label">隱藏 AP 迴圈掛載</string>
   <string id="force_hide_dex2oat_label">強制隱藏 Dex2oat 掛載</string>
   <string id="avc_log_spoofing_label">AVC 記錄檔欺騙</string>
   <string id="emulate_vold_app_data_label">模擬 Vold 應用資料隔離</string>

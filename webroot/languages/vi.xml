@@ -98,7 +98,7 @@
   <string id="hide_gapps_label">Ẩn GApps</string>
   <string id="hide_revanced_label">Ẩn Revanced (YT/YTM)</string>
   <string id="spoof_cmdline_label">Giả mạo Cmdline</string>
-  <string id="hide_ksu_loop_label">Ẩn vòng lặp KSU</string>
+  <string id="hide_ksu_loop_label">Ẩn vòng lặp AP</string>
   <string id="force_hide_dex2oat_label">Buộc ẩn các gắn kết Dex2oat</string>
   <string id="avc_log_spoofing_label">Giả nhật ký AVC</string>
   <string id="emulate_vold_app_data_label">Mô phỏng cách ly dữ liệu ứng dụng của Vold</string>

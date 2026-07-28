@@ -3,6 +3,8 @@
 
 void sus_mount_print_help(void);
 int hide_sus_mnts_for_non_su_procs(int argc, char *argv[]);
+int add_try_umount(int argc, char *argv[]);
+int auto_add_try_umount_for_bind_mount(int argc, char *argv[]);
 
 #endif // #ifndef SUS_MOUNT_H
 

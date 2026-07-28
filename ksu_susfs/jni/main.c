@@ -46,6 +46,10 @@ int main(int argc, char *argv[]) {
 		return add_sus_path_loop(argc, argv);
 	if (!strcmp(argv[1], "hide_sus_mnts_for_non_su_procs"))
 		return hide_sus_mnts_for_non_su_procs(argc, argv);
+	if (!strcmp(argv[1], "add_try_umount"))
+		return add_try_umount(argc, argv);
+	if (!strcmp(argv[1], "auto_add_try_umount_for_bind_mount"))
+		return auto_add_try_umount_for_bind_mount(argc, argv);
 	if (!strcmp(argv[1], "add_sus_map"))
 		return add_sus_map(argc, argv);
 	if (!strcmp(argv[1], "add_open_redirect"))

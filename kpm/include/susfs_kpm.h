@@ -68,6 +68,8 @@ extern int (*susfs_printk)(const char *fmt, ...);
 #define CMD_SUSFS_ADD_SUS_PATH              0x55550
 #define CMD_SUSFS_ADD_SUS_PATH_LOOP         0x55553
 #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU  0x55561
+#define CMD_SUSFS_ADD_TRY_UMOUNT            0x55562
+#define CMD_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT 0x55563
 #define CMD_SUSFS_ADD_SUS_KSTAT             0x55570
 #define CMD_SUSFS_UPDATE_SUS_KSTAT          0x55571
 #define CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY  0x55572
@@ -123,6 +125,8 @@ int susfs_open_redirect_init_hooks(void);
 
 /* features/sus_mount.c */
 int susfs_set_hide_sus_mnts(int enabled);
+int susfs_add_try_umount(const char *path, int mode);
+int susfs_auto_add_try_umount_for_bind_mount(void);
 void susfs_sus_mount_cleanup(void);
 int susfs_sus_mount_init_hooks(void);
 

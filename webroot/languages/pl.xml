@@ -98,7 +98,7 @@
   <string id="hide_gapps_label">Ukryj GApps</string>
   <string id="hide_revanced_label">Ukryj Revanced (YT/YTM)</string>
   <string id="spoof_cmdline_label">Sfałszuj komendy wiersza poleceń</string>
-  <string id="hide_ksu_loop_label">Ukryj pętlę KSU</string>
+  <string id="hide_ksu_loop_label">Ukryj pętlę AP</string>
   <string id="force_hide_dex2oat_label">Wymuś ukrycie montowania Dex2oat</string>
   <string id="avc_log_spoofing_label">Dziennik fałszowania AVC</string>
   <string id="emulate_vold_app_data_label">Emuluj izolację danych aplikacji Vold</string>

@@ -98,7 +98,7 @@
   <string id="hide_gapps_label">پنهان سازی برنامه‌های گوگل</string>
   <string id="hide_revanced_label">پنهان سازی Revanced (یوتیوب/موسیقی یوتیوب)</string>
   <string id="spoof_cmdline_label">جعل سازی خط فرمان</string>
-  <string id="hide_ksu_loop_label">پنهان سازی لوپ KSU</string>
+  <string id="hide_ksu_loop_label">پنهان سازی لوپ AP</string>
   <string id="force_hide_dex2oat_label">پنهان سازی اجباری پیوست های Dex2oat</string>
   <string id="avc_log_spoofing_label">جعل سازی گزارش AVC</string>
   <string id="emulate_vold_app_data_label">شبیه‌سازی ایزوله سازی داده‌های برنامه‌ Vold</string>

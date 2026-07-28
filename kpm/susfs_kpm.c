@@ -347,7 +347,9 @@ static long susfs_init(const char *args, const char *event, void *reserved)
                      "CONFIG_KSU_SUSFS_SPOOF_CMDLINE,"
                      "CONFIG_KSU_SUSFS_ENABLE_LOG,"
                      "CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING,"
-                     "CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS");
+                     "CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS,"
+                     "CONFIG_KSU_SUSFS_TRY_UMOUNT,"
+                     "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT");
         susfs_printk("susfs_kpm: loaded\n");
     }
 
@@ -436,6 +438,11 @@ static long susfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
                                        (int)parse_long(ARG(3), 0));
     case CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU:
         return susfs_set_hide_sus_mnts((int)parse_long(ARG(1), 0));
+    case CMD_SUSFS_ADD_TRY_UMOUNT:
+        if (argc < 2) return -EINVAL;
+        return susfs_add_try_umount(ARG(1), (int)parse_long(ARG(2), 0));
+    case CMD_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT:
+        return susfs_auto_add_try_umount_for_bind_mount();
     case CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY:
     case CMD_SUSFS_ADD_SUS_KSTAT:
     case CMD_SUSFS_UPDATE_SUS_KSTAT: {

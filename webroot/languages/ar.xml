@@ -98,7 +98,7 @@
   <string id="hide_gapps_label">إخفاء تطبيقات جوجل</string>
   <string id="hide_revanced_label">إخفاء YouTube/YT-Music (Revanced)</string>
   <string id="spoof_cmdline_label">تزييف cmdline</string>
-  <string id="hide_ksu_loop_label">إخفاء حلقة KSU</string>
+  <string id="hide_ksu_loop_label">إخفاء حلقة AP</string>
   <string id="force_hide_dex2oat_label">إخفاء Dex2oat إجباريّا</string>
   <string id="avc_log_spoofing_label">تزييف سجل AVC</string>
   <string id="emulate_vold_app_data_label">محاكاة عزل بيانات تطبيق Vold</string>

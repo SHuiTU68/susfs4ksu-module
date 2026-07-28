@@ -26,9 +26,15 @@ int susfs_show_enabled_features(char *out, int outlen)
     if (!out || outlen <= 0) return -EINVAL;
     /* Single newline-separated feature list using the upstream CONFIG_KSU_SUSFS_*
      * names so the existing module scripts (service.sh, boot-completed.sh,
-     * etc.) grep checks work unchanged.  Features not implemented by this KPM
-     * (sus_su, try_umount, auto_add_try_umount_for_bind_mount) are deliberately
-     * absent so the scripts correctly skip them. */
+     * etc.) grep checks work unchanged.
+     *
+     * try_umount / auto_add_try_umount_for_bind_mount are implemented via a
+     * hybrid approach: the KPM records the path list (for /proc/mounts
+     * filtering) and post-mount.sh performs the actual `umount -l` in the
+     * init mount namespace.  They are advertised so the WebUI auto-hide
+     * toggles appear and the CLI commands succeed.
+     *
+     * sus_su remains absent — it is not implemented by this KPM. */
     static const char features[] =
         "CONFIG_KSU_SUSFS_SUS_PATH\n"
         "CONFIG_KSU_SUSFS_SUS_MOUNT\n"
@@ -39,7 +45,9 @@ int susfs_show_enabled_features(char *out, int outlen)
         "CONFIG_KSU_SUSFS_SPOOF_CMDLINE\n"
         "CONFIG_KSU_SUSFS_ENABLE_LOG\n"
         "CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING\n"
-        "CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS\n";
+        "CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS\n"
+        "CONFIG_KSU_SUSFS_TRY_UMOUNT\n"
+        "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT\n";
     int i = 0;
     while (features[i] && i < outlen - 1) { out[i] = features[i]; i++; }
     out[i] = '\0';

@@ -98,7 +98,7 @@
   <string id="hide_gapps_label">Приховати GApps</string>
   <string id="hide_revanced_label">Приховати Revanced (YT/YTM)</string>
   <string id="spoof_cmdline_label">Підміна Cmdline</string>
-  <string id="hide_ksu_loop_label">Приховати KSU Loop</string>
+  <string id="hide_ksu_loop_label">Приховати AP Loop</string>
   <string id="force_hide_dex2oat_label">Примусово приховати монтування Dex2oat</string>
   <string id="avc_log_spoofing_label">Підміна логів AVC</string>
   <string id="emulate_vold_app_data_label">Емуляція ізоляції даних застосунків</string>

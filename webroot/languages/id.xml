@@ -98,7 +98,7 @@
   <string id="hide_gapps_label">Sembunyikan GApps</string>
   <string id="hide_revanced_label">Sembunyikan Revanced (YT/YTM)</string>
   <string id="spoof_cmdline_label">Spoof Cmdline</string>
-  <string id="hide_ksu_loop_label">Sembunyikan KSU Loop</string>
+  <string id="hide_ksu_loop_label">Sembunyikan AP Loop</string>
   <string id="force_hide_dex2oat_label">Paksa Sembunyikan Mount Dex2oat</string>
   <string id="avc_log_spoofing_label">Spoof AVC Log</string>
   <string id="emulate_vold_app_data_label">Emulasikan Isolasi Data Apl Vold</string>

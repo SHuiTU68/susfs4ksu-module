@@ -98,7 +98,7 @@
   <string id="hide_gapps_label">Nascondi GApps</string>
   <string id="hide_revanced_label">Nascondi Revanced (YT/YTM)</string>
   <string id="spoof_cmdline_label">Falsifica Cmdline</string>
-  <string id="hide_ksu_loop_label">Nascondi KSU Loop</string>
+  <string id="hide_ksu_loop_label">Nascondi AP Loop</string>
   <string id="force_hide_dex2oat_label">Forza Nascondi Dex2oat</string>
   <string id="avc_log_spoofing_label">Spoofing Registro AVC</string>
   <string id="emulate_vold_app_data_label">Emula Isolamento Vold App Data</string>

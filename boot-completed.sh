@@ -50,13 +50,12 @@ emulate_vold_app_data=0
 if [ -f $tmpfolder/logs/susfs_active ] || dmesg | grep -qE "susfs:|susfs_kpm:"; then
 		# Detect susfs features this KPM deliberately does NOT implement and
 		# surface them in the WebUI status so users know which capabilities
-		# are unavailable.  Each entry pairs the CONFIG_ name (as emitted by
-		# `ksu_susfs show enabled_features`) with a short display label.
+		# are unavailable.  try_umount / auto_add_try_umount ARE now supported
+		# (hybrid: KPM records the list, post-mount.sh does userspace umount),
+		# so only sus_su remains in the unsupported list.
 		unsupported=""
 		for entry in \
-			"CONFIG_KSU_SUSFS_SUS_SU|sus_su" \
-			"CONFIG_KSU_SUSFS_TRY_UMOUNT|try_umount" \
-			"CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT|auto_add_try_umount"; do
+			"CONFIG_KSU_SUSFS_SUS_SU|sus_su"; do
 			feat="${entry%%|*}"
 			label="${entry##*|}"
 			if ! echo "$susfs_features" | grep -q "^${feat}$"; then
