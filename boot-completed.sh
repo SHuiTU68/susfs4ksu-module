@@ -211,7 +211,11 @@ fi
 		if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
 			${SUSFS_BIN} add_try_umount "${LINE}" 1 && echo "[try_umount (SUSFS)]: susfs4ksu/boot-completed ${LINE}" >> $logfile1
 		elif [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
-			${AP_BIN} kernel umount add "${LINE}" --flags 2 && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed ${LINE}" >> $logfile1
+			# NOTE: `apd kernel umount add` only exists on susfs-patched apd
+			# builds (susfs v2.0+).  Stock bmax121/APatch apd has no `kernel`
+			# subcommand — this call fails silently there.  The whole branch
+			# is skipped for this KPM (SUSFS_DECIMAL_MAIN=1).
+			${AP_BIN} kernel umount add "${LINE}" --flags 2 2>/dev/null && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed ${LINE}" >> $logfile1
 		fi
 	done
 
@@ -226,10 +230,12 @@ fi
 }
 
 # Check and process try_umount paths (KSUD) (susfs v2.0.0+)
+# Only runs on susfs v2.0+ without native try_umount; stock apd has no
+# `kernel umount` subcommand, so suppress stderr on non-patched builds.
 if [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
 	if grep -v "#" "$PERSISTENT_DIR/try_umount.txt" > /dev/null; then
 		grep -v "#" "$PERSISTENT_DIR/try_umount.txt" | while read -r i; do
-			[ -z "$i" ] || { ${AP_BIN} kernel umount add "$i" --flags 2 && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed $i" >> "$logfile1"; }
+			[ -z "$i" ] || { ${AP_BIN} kernel umount add "$i" --flags 2 2>/dev/null && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed $i" >> "$logfile1"; }
 		done
 	fi
 fi
@@ -330,7 +336,7 @@ fi
 			${SUSFS_BIN} add_try_umount $path 1 && echo "[try_umount] susfs4ksu/boot-completed: $path [add_try_umount] $i" >> $logfile1
 		fi
 		if [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
-			${AP_BIN} kernel umount add $path --flags 2 && echo "[try_umount (KSUD)] susfs4ksu/boot-completed: $path [add_try_umount] $i" >> $logfile1
+			${AP_BIN} kernel umount add $path --flags 2 2>/dev/null && echo "[try_umount (KSUD)] susfs4ksu/boot-completed: $path [add_try_umount] $i" >> $logfile1
 		fi
 		done
 	}

@@ -14,21 +14,33 @@ logfile1="$tmpfolder/logs/susfs1.log"
 post_fs_data=0
 [ -f $tmpfolder/logs/boot_stage_time.sh ] && . $tmpfolder/logs/boot_stage_time.sh
 
+# Feature list from the KPM — needed to guard calls to features this KPM
+# does NOT implement (try_umount, sus_su, auto_add_try_umount).  When the
+# feature is absent we skip the call instead of letting ksu_susfs fail.
+susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null)
+
 # to add mounts
 # echo "/system" >> /data/adb/susfs4ksu/sus_mount.txt
 # this'll make it easier for the webui to do stuff
 # Check and process sus_mount paths
-if grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" > /dev/null; then
-    grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" | while read -r i; do
-        [ -z "$i" ] || { ${SUSFS_BIN} add_sus_mount "$i" && echo "[sus_mount]: susfs4ksu/post-mount $i" >> "$logfile1"; }
-    done
+if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
+    if grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" > /dev/null; then
+        grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" | while read -r i; do
+            [ -z "$i" ] || { ${SUSFS_BIN} add_sus_mount "$i" && echo "[sus_mount]: susfs4ksu/post-mount $i" >> "$logfile1"; }
+        done
+    fi
 fi
 
 # Check and process try_umount paths
-if grep -v "#" "$PERSISTENT_DIR/try_umount.txt" > /dev/null; then
-    grep -v "#" "$PERSISTENT_DIR/try_umount.txt" | while read -r i; do
-        [ -z "$i" ] || { ${SUSFS_BIN} add_try_umount "$i" 1 && echo "[try_umount]: susfs4ksu/post-mount $i" >> "$logfile1"; }
-    done
+# try_umount is NOT implemented in this KPM — the grep guard skips the call
+# silently.  (On susfs v2.0+ kernels with a patched apd, the fallback to
+# `apd kernel umount add` would go here, but stock apd has no such command.)
+if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
+    if grep -v "#" "$PERSISTENT_DIR/try_umount.txt" > /dev/null; then
+        grep -v "#" "$PERSISTENT_DIR/try_umount.txt" | while read -r i; do
+            [ -z "$i" ] || { ${SUSFS_BIN} add_try_umount "$i" 1 && echo "[try_umount]: susfs4ksu/post-mount $i" >> "$logfile1"; }
+        done
+    fi
 fi
 
 # SUSFS Logging
