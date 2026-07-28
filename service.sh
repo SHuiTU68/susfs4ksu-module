@@ -8,11 +8,11 @@ logfile1="$tmpfolder/logs/susfs1.log"
 logfile="$tmpfolder/logs/susfs.log"
 version=$(${SUSFS_BIN} show version)
 susfs_features=$(${SUSFS_BIN} show enabled_features)
-# SUSFS_DECIMAL_MAIN = '1'
+# SUSFS_DECIMAL_MAIN = '2'
 SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
-# SUSFS_DECIMAL_SUB = '5'
+# SUSFS_DECIMAL_SUB = '0'
 SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
-# SUSFS_DECIMAL_PATCH = '3'
+# SUSFS_DECIMAL_PATCH = '0'
 SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
 
 # Mount folder of susfs4ksu

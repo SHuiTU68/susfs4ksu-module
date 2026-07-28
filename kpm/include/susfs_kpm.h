@@ -91,17 +91,21 @@ extern int (*susfs_printk)(const char *fmt, ...);
 #define __NEW_UTS_LEN                       64
 
 /* KPM identity exposed to userspace.
- * VERSION is set to "1.5.9" to satisfy the WebUI's version gates:
- *   >= 1.5.3 : kernel support status page visible
- *   >= 1.5.5 : auto_try_umount toggle
- *   >= 1.5.7 : hide_sus_mnts toggle
- *   >= 1.5.8 : umount_for_zygote_iso_service toggle
- *   >= 1.5.9 : avc_log_spoofing toggle
- * Scripts use SUSFS_DECIMAL_MAIN (the major) for branching; at 1.5.9 the
- * major is still 1, so [ $SUSFS_DECIMAL_MAIN -ge 2 ] stays false — no
- * script behavior change. */
+ * VERSION is set to "2.0.0" so that:
+ *   - The WebUI kernel-support status page shows the 4 try_umount / auto-*
+ *     features as "Deprecated" (their deprecated threshold is 2.0.0 in the
+ *     WebUI JS).  This is honest: this KPM implements them via a hybrid
+ *     userspace approach (post-mount.sh `umount -l`) rather than in-kernel
+ *     vfsmount detachment, so they ARE deprecated relative to native susfs.
+ *   - All version-gated toggles (>= 1.5.5 ... >= 1.5.9) are unlocked.
+ *   - Script branches gated on [ $SUSFS_DECIMAL_MAIN -ge 2 ] activate, but
+ *     those branches only run the `apd kernel umount` fallback when
+ *     CONFIG_KSU_SUSFS_TRY_UMOUNT is ABSENT from enabled_features.  Since
+ *     this KPM DOES advertise TRY_UMOUNT (for toggle visibility), those
+ *     fallback branches stay skipped and the native add_try_umount path
+ *     runs instead — exactly what we want. */
 #define SUSFS_KPM_NAME    "susfs_kpm"
-#define SUSFS_KPM_VERSION "1.5.9"
+#define SUSFS_KPM_VERSION "2.0.0"
 #define SUSFS_KPM_VARIANT "GKI-APATCH"
 
 /* UID schemes for open_redirect (mirror upstream enum) */

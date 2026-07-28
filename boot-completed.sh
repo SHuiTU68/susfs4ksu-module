@@ -11,11 +11,11 @@ logfile1="$tmpfolder/logs/susfs1.log"
 # safe; no timeout needed.
 version=$(${SUSFS_BIN} show version 2>/dev/null)
 susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null)
-# SUSFS_DECIMAL_MAIN = '1'
+# SUSFS_DECIMAL_MAIN = '2'
 SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
-# SUSFS_DECIMAL_SUB = '5'
+# SUSFS_DECIMAL_SUB = '0'
 SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
-# SUSFS_DECIMAL_PATCH = '3'
+# SUSFS_DECIMAL_PATCH = '0'
 SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
 
 legit_mounts="$PERSISTENT_DIR/legit_mounts.txt"
@@ -214,8 +214,10 @@ fi
 		elif [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
 			# NOTE: `apd kernel umount add` only exists on susfs-patched apd
 			# builds (susfs v2.0+).  Stock bmax121/APatch apd has no `kernel`
-			# subcommand — this call fails silently there.  The whole branch
-			# is skipped for this KPM (SUSFS_DECIMAL_MAIN=1).
+			# subcommand — this call fails silently there.  This branch only
+			# runs when the KPM does NOT advertise TRY_UMOUNT; since this KPM
+			# DOES advertise it (hybrid userspace impl), this branch is skipped
+			# and the native add_try_umount path above runs instead.
 			${AP_BIN} kernel umount add "${LINE}" --flags 2 2>/dev/null && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed ${LINE}" >> $logfile1
 		fi
 	done
