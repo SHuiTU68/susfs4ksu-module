@@ -49,87 +49,11 @@ CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
 CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT"
 fi
 
-# to add mounts
-# echo "/system" >> /data/adb/susfs4ksu/sus_mount.txt
-# this'll make it easier for the webui to do stuff
-# Check and process sus_mount paths
-if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
-    if grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" > /dev/null; then
-        grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" | while read -r i; do
-            [ -z "$i" ] || { ${SUSFS_BIN} add_sus_mount "$i" && echo "[sus_mount]: susfs4ksu/post-mount $i" >> "$logfile1"; }
-        done
-    fi
-fi
-
-# ===== try_umount — the "another way" for APatch =====
-# Upstream susfs detaches the vfsmount in-kernel; this KPM can't do that
-# safely (no struct mount internals).  Instead we use a hybrid approach:
-#   1. Tell the KPM about the path (add_try_umount) so it can hide it from
-#      /proc/mounts for non-su readers via the show_mountinfo hook.
-#   2. Actually detach the mount HERE via `umount -l` in the init mount
-#      namespace, which zygote-spawned apps inherit.  This is the real
-#      "sus mount hiding" effect.
-# This runs in post-mount (late_start service) so the mounts are already
-# up; `umount -l` (lazy) avoids EBUSY from open files.
-if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
-    # (a) Explicit paths from try_umount.txt
-    if grep -v "#" "$PERSISTENT_DIR/try_umount.txt" > /dev/null; then
-        grep -v "#" "$PERSISTENT_DIR/try_umount.txt" | while read -r i; do
-            [ -z "$i" ] && continue
-            ${SUSFS_BIN} add_try_umount "$i" 1 2>/dev/null
-            umount -l "$i" 2>/dev/null && echo "[try_umount]: susfs4ksu/post-mount umount $i" >> "$logfile1"
-        done
-    fi
-    # (b) Auto-add default module mounts — controlled by the WebUI toggle
-    #     which creates/removes the sentinel file
-    #     /data/adb/susfs_no_auto_add_sus_ksu_default_mount.
-    #     When the sentinel is ABSENT (auto-add ON), we umount the standard
-    #     APatch/module overlay mounts so apps can't see them.
-    if [ ! -f /data/adb/susfs_no_auto_add_sus_ksu_default_mount ]; then
-        echo "[auto_mount]: auto-adding default module mounts" >> "$logfile1"
-        for def_mnt in \
-            /data/adb/modules \
-            /data/adb/ap \
-            /data/adb/ksu \
-            /debug_ramdisk
-        do
-            # umount any mount whose source is under def_mnt
-            awk -v s="$def_mnt" '$1 ~ s {print $2}' /proc/mounts 2>/dev/null | while read -r mp; do
-                [ -z "$mp" ] && continue
-                case "$mp" in
-                    /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
-                esac
-                ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null
-                umount -l "$mp" 2>/dev/null && echo "[auto_mount]: umount $mp" >> "$logfile1"
-            done
-        done
-    fi
-    # (c) Auto-detect suspicious bind mounts — controlled by the WebUI
-    #     toggle which creates/removes the sentinel file
-    #     /data/adb/susfs_no_auto_add_sus_bind_mount.
-    if [ ! -f /data/adb/susfs_no_auto_add_sus_bind_mount ] || \
-       [ "$auto_bind" = "1" ] || [ "$auto_umount_bind" = "1" ] || [ "$auto_try_umount" = "1" ]; then
-        echo "[auto_bind]: scanning /proc/mounts for suspicious bind mounts" >> "$logfile1"
-        ${SUSFS_BIN} auto_add_try_umount_for_bind_mount 2>/dev/null
-        for suspect in \
-            /data/adb/modules \
-            /data/adb/ap \
-            /data/adb/ksu \
-            /debug_ramdisk \
-            /sbin
-        do
-            grep -v "#" "$PERSISTENT_DIR/try_umount.txt" 2>/dev/null | grep -q "^${suspect}\$" && continue
-            awk -v s="$suspect" '$1 ~ s {print $2}' /proc/mounts 2>/dev/null | while read -r mp; do
-                [ -z "$mp" ] && continue
-                case "$mp" in
-                    /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
-                esac
-                ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null
-                umount -l "$mp" 2>/dev/null && echo "[auto_bind]: umount $mp" >> "$logfile1"
-            done
-        done
-    fi
-fi
+# ===== sus_mount / try_umount — umount is done in post-fs-data.sh =====
+# The actual `umount -l` MUST run in post-fs-data.sh (BEFORE zygote) so apps
+# never inherit the hidden mounts.  This script (late_start service, AFTER
+# zygote) only re-registers paths with the KPM for /proc/mounts filtering
+# and handles force_hide_lsposed (which needs apex mounts to be up first).
 
 # force_hide_lsposed — detach LSPosed's dex2oat overlay mounts so the stock
 # binary is used.  post-fs-data.sh already registered them via add_try_umount

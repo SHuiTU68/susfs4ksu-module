@@ -114,6 +114,7 @@ spoof_uname=0
 umount_for_zygote_iso_service=0
 avc_log_spoofing=0
 hide_sus_mnts_for_all_or_non_su_procs=0
+auto_try_umount=0
 [ -f $PERSISTENT_DIR/config.sh ] && . $PERSISTENT_DIR/config.sh
 
 echo "susfs4ksu/post-fs-data: [logging_initialized]" > $logfile1
@@ -169,7 +170,7 @@ enable_sus_su_mode_1(){
 
 # LSPosed
 # but this is probably not needed if auto_sus_bind_mount is enabled
-if [ $force_hide_lsposed = 1 ] && echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then 
+if [ $force_hide_lsposed = 1 ] && echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
 	echo "susfs4ksu/post-fs-data: [force_hide_lsposed]" >> $logfile1
 	${SUSFS_BIN} add_try_umount /system/apex/com.android.art/bin/dex2oat 1
 	${SUSFS_BIN} add_try_umount /system/apex/com.android.art/bin/dex2oat32 1
@@ -177,6 +178,66 @@ if [ $force_hide_lsposed = 1 ] && echo "$susfs_features" | grep -q "CONFIG_KSU_S
 	${SUSFS_BIN} add_try_umount /apex/com.android.art/bin/dex2oat 1
 	${SUSFS_BIN} add_try_umount /apex/com.android.art/bin/dex2oat32 1
 	${SUSFS_BIN} add_try_umount /apex/com.android.art/bin/dex2oat64 1
+fi
+
+# ===== sus_mount / try_umount — MUST run here in post-fs-data (BEFORE zygote) =====
+# This is the critical fix: `umount -l` must happen BEFORE zygote forks app
+# processes.  If done in post-mount.sh (late_start service, AFTER zygote),
+# apps have already inherited the init mount namespace and the umount only
+# affects the service's own namespace — apps still see the mounts.
+#
+# Flow: post-fs-data runs after module overlays are set up but before zygote.
+# Umount here → init namespace loses the mount → zygote inherits clean namespace
+# → apps never see the hidden mounts.
+
+# (1) sus_mount — record paths in KPM (for /proc/mounts hook) and also
+#     umount them if hide_sus_mnts_for_all_or_non_su_procs is enabled.
+if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
+    if grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" > /dev/null 2>&1; then
+        grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" | while read -r i; do
+            [ -z "$i" ] && continue
+            ${SUSFS_BIN} add_sus_mount "$i" 2>/dev/null
+            # If hide_sus_mnts_for_all_or_non_su_procs is on, actually detach
+            # the mount so it disappears from /proc/mounts for ALL processes.
+            if [ "$hide_sus_mnts_for_all_or_non_su_procs" -ge 1 ] 2>/dev/null; then
+                umount -l "$i" 2>/dev/null && echo "[sus_mount]: umount $i" >> "$logfile1"
+            fi
+        done
+    fi
+fi
+
+# (2) try_umount — record paths in KPM AND actually umount them.
+if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
+    # (a) Explicit paths from try_umount.txt
+    if grep -v "#" "$PERSISTENT_DIR/try_umount.txt" > /dev/null 2>&1; then
+        grep -v "#" "$PERSISTENT_DIR/try_umount.txt" | while read -r i; do
+            [ -z "$i" ] && continue
+            ${SUSFS_BIN} add_try_umount "$i" 1 2>/dev/null
+            umount -l "$i" 2>/dev/null && echo "[try_umount]: umount $i" >> "$logfile1"
+        done
+    fi
+    # (b) auto_try_umount — scan for suspicious bind mounts and umount them.
+    #     Controlled by WebUI toggle (auto_try_umount=1 in config.sh).
+    if [ "$auto_try_umount" = "1" ] && [ ! -f /data/adb/susfs_no_auto_add_try_umount_for_bind_mount ]; then
+        echo "[auto_try_umount]: scanning /proc/mounts for suspicious bind mounts" >> "$logfile1"
+        ${SUSFS_BIN} auto_add_try_umount_for_bind_mount 2>/dev/null
+        for suspect in \
+            /data/adb/modules \
+            /data/adb/ap \
+            /data/adb/ksu \
+            /debug_ramdisk \
+            /sbin
+        do
+            awk -v s="$suspect" '$1 ~ s {print $2}' /proc/mounts 2>/dev/null | while read -r mp; do
+                [ -z "$mp" ] && continue
+                case "$mp" in
+                    /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
+                esac
+                ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null
+                umount -l "$mp" 2>/dev/null && echo "[auto_try_umount]: umount $mp" >> "$logfile1"
+            done
+        done
+    fi
 fi
 
 # - set to 1 to enable umount for all zygote spawned services, but be reminded that
