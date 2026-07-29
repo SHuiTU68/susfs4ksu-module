@@ -7,10 +7,24 @@ PERSISTENT_DIR=/data/adb/susfs4ksu
 tmpfolder=/data/adb/ap/susfs4ksu
 logfile="$tmpfolder/logs/susfs.log"
 logfile1="$tmpfolder/logs/susfs1.log"
-# ksu_susfs show now parses dmesg directly (no supercall) — instant and
-# safe; no timeout needed.
-version=$(${SUSFS_BIN} show version 2>/dev/null)
-susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null)
+# Parse KPM info from cached dmesg (post-fs-data.sh already cached it).
+# This avoids 2+ `dmesg` calls which each take 0.5-2s and cause boot lag.
+dmesg_cache="$tmpfolder/logs/dmesg_cache.txt"
+# If post-fs-data's cache is missing or stale, refresh it once
+if [ ! -f "$dmesg_cache" ] || [ $(($(date +%s) - $(stat -c %Y "$dmesg_cache" 2>/dev/null || echo 0))) -gt 60 ]; then
+	dmesg 2>/dev/null > "$dmesg_cache"
+fi
+
+version=""
+susfs_features=""
+_features_line=$(grep 'susfs_kpm: features=' "$dmesg_cache" 2>/dev/null | tail -1)
+if [ -n "$_features_line" ]; then
+	susfs_features=$(echo "$_features_line" | sed 's/.*features=//' | tr ',' '\n')
+fi
+_version_line=$(grep 'susfs_kpm: version=' "$dmesg_cache" 2>/dev/null | tail -1)
+if [ -n "$_version_line" ]; then
+	version=$(echo "$_version_line" | sed 's/.*version=//;s/ .*//')
+fi
 # Fallback: if show enabled_features fails, default to the builtin feature
 # list so feature-gated blocks below still run.
 if [ -z "$susfs_features" ] || ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
@@ -223,17 +237,21 @@ fi
 		} >> $logfile1
 	fi
 
-	# Get all susfs mounts from /proc/1/mountinfo
-	sus_mounts=$(grep -E "^[25][0-9]{5,9} .* (KSU|shared).*$" /proc/1/mountinfo | awk '{print $5}') # Newer susfs mount IDs start with 500k or 2b
-	# Fallback to older susfs mount IDs if no mounts found within 500k range
-	if [ -z "$sus_mounts" ]; then
-		sus_mounts=$(grep -E "^[13][0-9]{5} .* (KSU|shared).*$" /proc/1/mountinfo | awk '{print $5}')
-	fi
-	# Loop through each susfs mount and add_try_umount path (for KPM records)
+	# Register standard module paths with the KPM for /proc/mounts hiding.
+	# APatch now uses meta-modules (no overlay mounts), so we register
+	# the standard paths directly instead of scanning mountinfo for
+	# "KSU"/"shared" mount IDs.
+	sus_mounts="/data/adb/modules /data/adb/ap /data/adb/ksu /debug_ramdisk /sbin"
+	# Also scan mountinfo for any overlay mounts referencing /data/adb
+	# (some APatch versions still use overlay for specific paths)
+	_extra=$(grep -E '/data/adb/(modules|ap|ksu)' /proc/1/mountinfo 2>/dev/null | awk '{print $5}' | sort -u)
+	sus_mounts="$sus_mounts $_extra"
+	# Loop through each path and add_try_umount (for KPM records)
 	for LINE in $sus_mounts; do
+		[ -z "$LINE" ] && continue
 
 		# remove legit mounts from the list if skip_legit_mounts is enabled
-		if [ $skip_legit_mounts = 1 ] && grep -qE "^$LINE$" $legit_mounts 2>/dev/null; then
+		if [ $skip_legit_mounts = 1 ] && grep -qE "^${LINE}$" $legit_mounts 2>/dev/null; then
 			echo "[skip_legit_mounts] Skipping legit mount: $LINE" >> $logfile1
 			continue
 		fi

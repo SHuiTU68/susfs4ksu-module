@@ -9,24 +9,33 @@ mkdir -p $tmpfolder
 logfile="$tmpfolder/logs/susfs.log"
 logfile1="$tmpfolder/logs/susfs1.log"
 
-# Step 1: Fast dmesg check first (instant, no superkey needed).
-# The KPM printk's "susfs_kpm: loaded ..." at init.  Only if dmesg shows
-# the KPM do we try the supercall — otherwise we'd waste 10+ seconds on
-# superkey extraction (kptools/boot scan) for a KPM that isn't even loaded.
+# Step 1: Cache dmesg ONCE — `dmesg` reads the entire kernel ring buffer
+# and can take 0.5-2s per call.  We used to call it 4+ times (once here,
+# then again inside each `ksu_susfs show` call).  Now we read it once
+# into a temp file and grep from that.
+dmesg_cache="$tmpfolder/logs/dmesg_cache.txt"
+dmesg 2>/dev/null > "$dmesg_cache"
+
 kpm_in_dmesg=0
-if dmesg 2>/dev/null | grep -qE "susfs:|susfs_kpm:"; then
+if grep -qE "susfs:|susfs_kpm:" "$dmesg_cache" 2>/dev/null; then
 	kpm_in_dmesg=1
 fi
 
-# ksu_susfs show version/features/variant now parse dmesg directly (no
-# supercall) — see ksu_susfs/jni/features/show.c.  This is instant and
-# never blocks boot.  We DON'T use `timeout` because the dmesg-based show
-# is already fast and timeout itself may be unavailable in early boot.
+# ksu_susfs show version/features/variant parse dmesg.  To avoid 3 more
+# `dmesg` calls, we parse the cached output directly here.
 susfs_features=""
 version=""
 if [ $kpm_in_dmesg -eq 1 ]; then
-	susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null)
-	version=$(${SUSFS_BIN} show version 2>/dev/null)
+	# Parse features from dmesg cache: "features=CONFIG_...,CONFIG_..."
+	_features_line=$(grep 'susfs_kpm: features=' "$dmesg_cache" | tail -1)
+	if [ -n "$_features_line" ]; then
+		susfs_features=$(echo "$_features_line" | sed 's/.*features=//' | tr ',' '\n')
+	fi
+	# Parse version from dmesg cache: "version=2.2.0"
+	_version_line=$(grep 'susfs_kpm: version=' "$dmesg_cache" | tail -1)
+	if [ -n "$_version_line" ]; then
+		version=$(echo "$_version_line" | sed 's/.*version=//;s/ .*//')
+	fi
 fi
 # Fallback: if show enabled_features fails, default to the builtin feature
 # list so feature-gated blocks below still run.
@@ -69,7 +78,9 @@ mkdir -p $mntfolder
 diag_file="$tmpfolder/logs/susfs_diag.txt"
 if [ -n "$version" ] || [ -n "$susfs_features" ]; then
 	touch $tmpfolder/logs/susfs_active
-	susfs_variant=$(${SUSFS_BIN} show variant 2>/dev/null)
+	# Parse variant from dmesg cache instead of calling ksu_susfs again
+	susfs_variant=$(grep 'susfs_kpm: version=' "$dmesg_cache" | tail -1 | sed 's/.*variant=//;s/ .*//')
+	[ -z "$susfs_variant" ] && susfs_variant="GKI-APATCH"
 	{
 		echo "=== susfs4ksu/post-fs-data ==="
 		echo "timestamp: $(date)"
@@ -87,7 +98,7 @@ elif [ $kpm_in_dmesg -eq 1 ]; then
 		echo "timestamp: $(date)"
 		echo "status: ACTIVE (dmesg only — show parse failed)"
 		echo "uid: $(id -u)"
-		echo "dmesg_susfs: $(dmesg 2>/dev/null | grep -iE 'susfs|susfs_kpm' | head -5)"
+		echo "dmesg_susfs: $(grep -iE 'susfs|susfs_kpm' "$dmesg_cache" | head -5)"
 	} > "$diag_file" 2>&1
 else
 	# KPM not found in dmesg at all — not loaded.
@@ -199,6 +210,9 @@ fi
 #     IMPORTANT: this does NOT actually umount anything.  The KPM hook
 #     intercepts /proc/mounts reads and filters out these mountpoints
 #     for non-su processes.  The mounts remain active for root/APatch.
+#     NOTE: APatch now uses meta-modules (like KSU) instead of overlay
+#     mounts, so /proc/1/mountinfo may NOT contain /data/adb entries.
+#     We register standard paths directly instead of scanning mountinfo.
 if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
     # (a) Explicit paths from sus_mount.txt
     if grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" > /dev/null 2>&1; then
@@ -207,20 +221,26 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
             ${SUSFS_BIN} add_sus_mount "$i" 2>/dev/null && echo "[sus_mount]: susfs4ksu/post-fs-data $i" >> "$logfile1"
         done
     fi
-    # (b) Auto-detect: when hide_sus_mnts is enabled, scan /proc/1/mountinfo
-    #     for ALL mounts referencing /data/adb and register them with the KPM.
+    # (b) Auto-register: when hide_sus_mnts is enabled, register the
+    #     standard module/root paths with the KPM.
     #     This runs ALWAYS when hide_sus_mnts is on — no auto_* toggle needed.
     if [ "$hide_sus_mnts_for_all_or_non_su_procs" -ge 1 ] 2>/dev/null; then
-        echo "[sus_mount]: auto-scanning /proc/1/mountinfo for /data/adb mounts" >> "$logfile1"
+        echo "[sus_mount]: registering standard module paths" >> "$logfile1"
+        for auto_mp in \
+            /data/adb/modules \
+            /data/adb/ap \
+            /data/adb/ksu \
+            /debug_ramdisk \
+            /sbin
+        do
+            ${SUSFS_BIN} add_sus_mount "$auto_mp" 2>/dev/null && echo "[sus_mount]: auto $auto_mp" >> "$logfile1"
+        done
+        # Also scan /proc/1/mountinfo for any mounts referencing /data/adb
+        # (some APatch versions still use overlay for specific paths)
         grep -E '/data/adb/(modules|ap|ksu)' /proc/1/mountinfo 2>/dev/null | \
             awk '{print $5}' | sort -u | while read -r mp; do
             [ -z "$mp" ] && continue
             ${SUSFS_BIN} add_sus_mount "$mp" 2>/dev/null && echo "[sus_mount]: auto $mp" >> "$logfile1"
-        done
-        for auto_mp in /debug_ramdisk /sbin; do
-            grep -q " ${auto_mp} " /proc/1/mountinfo 2>/dev/null && {
-                ${SUSFS_BIN} add_sus_mount "$auto_mp" 2>/dev/null && echo "[sus_mount]: auto $auto_mp" >> "$logfile1"
-            }
         done
     fi
 fi
@@ -238,23 +258,29 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
             ${SUSFS_BIN} add_try_umount "$i" 1 2>/dev/null && echo "[try_umount]: susfs4ksu/post-fs-data $i" >> "$logfile1"
         done
     fi
-    # (b) Auto-register: when any auto_* toggle is on, scan /proc/1/mountinfo
-    #     for mounts referencing /data/adb and register them with the KPM
-    #     so the kernel hook hides them from umounted app processes.
+    # (b) Auto-register: when any auto_* toggle is on, register standard
+    #     module paths with the KPM so the kernel hook hides them from
+    #     umounted app processes.  APatch meta-modules don't show in
+    #     mountinfo, so we register paths directly.
     if [ ! -f /data/adb/susfs_no_auto_add_try_umount_for_bind_mount ]; then
         if [ "$auto_try_umount" = "1" ] || [ "$auto_mount" = "1" ] || \
            [ "$auto_bind" = "1" ] || [ "$auto_umount_bind" = "1" ]; then
-            echo "[try_umount]: auto-scanning /proc/1/mountinfo for hide targets (auto_try_umount=$auto_try_umount auto_mount=$auto_mount auto_bind=$auto_bind auto_umount_bind=$auto_umount_bind)" >> "$logfile1"
+            echo "[try_umount]: registering standard module paths (auto_try_umount=$auto_try_umount auto_mount=$auto_mount auto_bind=$auto_bind auto_umount_bind=$auto_umount_bind)" >> "$logfile1"
             ${SUSFS_BIN} auto_add_try_umount_for_bind_mount 2>/dev/null
+            for auto_mp in \
+                /data/adb/modules \
+                /data/adb/ap \
+                /data/adb/ksu \
+                /debug_ramdisk \
+                /sbin
+            do
+                ${SUSFS_BIN} add_try_umount "$auto_mp" 1 2>/dev/null && echo "[try_umount]: auto $auto_mp" >> "$logfile1"
+            done
+            # Also scan mountinfo for any overlay mounts referencing /data/adb
             grep -E '/data/adb/(modules|ap|ksu)' /proc/1/mountinfo 2>/dev/null | \
                 awk '{print $5}' | sort -u | while read -r mp; do
                 [ -z "$mp" ] && continue
                 ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null && echo "[try_umount]: auto $mp" >> "$logfile1"
-            done
-            for auto_mp in /debug_ramdisk /sbin; do
-                grep -q " ${auto_mp} " /proc/1/mountinfo 2>/dev/null && {
-                    ${SUSFS_BIN} add_try_umount "$auto_mp" 1 2>/dev/null && echo "[try_umount]: auto $auto_mp" >> "$logfile1"
-                }
             done
         fi
     fi
