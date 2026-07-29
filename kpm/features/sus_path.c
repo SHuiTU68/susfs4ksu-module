@@ -136,8 +136,29 @@ static int sus_path_should_hide(const char __user *user_path)
 /* openat(int dfd, const char *pathname, int flags, mode_t mode) — 4 args */
 static void before_openat(hook_fargs4_t *args, void *udata)
 {
-    if (!caller_should_hide()) return;
+    uid_t uid = current_uid();
+    if (uid < 10000) return;
+
     const char __user *user_path = (const char __user *)syscall_argn(args, 1);
+    if (!user_path) return;
+
+    /* Debug: log every openat by an app process so we can confirm the
+     * hook is actually firing.  Rate-limited via a simple counter to
+     * avoid flooding dmesg. */
+    static int openat_debug_count = 0;
+    if (openat_debug_count < 20) {
+        char dbgpath[128];
+        int dn = compat_strncpy_from_user(dbgpath, user_path, sizeof(dbgpath) - 1);
+        if (dn > 0) {
+            dbgpath[dn] = '\0';
+            if (susfs_printk) {
+                susfs_printk("susfs_kpm: [DEBUG] openat hook uid=%d path=%s\n",
+                             uid, dbgpath);
+            }
+            openat_debug_count++;
+        }
+    }
+
     if (sus_path_should_hide(user_path)) {
         args->skip_origin = 1;
         args->ret = (uint64_t)(long)-ENOENT;
@@ -213,6 +234,8 @@ int susfs_sus_path_init_hooks(void)
     hook_err_t err = hook_syscalln(__NR_openat, 4, before_openat, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook openat failed: %d\n", err);
+        if (susfs_printk)
+            susfs_printk("susfs_kpm: hook openat FAILED err=%d\n", err);
         rc = (int)err;
     } else {
         openat_hooked = 1;
@@ -223,6 +246,8 @@ int susfs_sus_path_init_hooks(void)
     err = hook_syscalln(__NR_faccessat, 3, before_faccessat, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook faccessat failed: %d\n", err);
+        if (susfs_printk)
+            susfs_printk("susfs_kpm: hook faccessat FAILED err=%d\n", err);
         rc = (int)err;
     } else {
         faccessat_hooked = 1;
@@ -233,6 +258,8 @@ int susfs_sus_path_init_hooks(void)
     err = hook_syscalln(__NR_newfstatat, 4, before_newfstatat, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook newfstatat failed: %d\n", err);
+        if (susfs_printk)
+            susfs_printk("susfs_kpm: hook newfstatat FAILED err=%d\n", err);
         rc = (int)err;
     } else {
         newfstatat_hooked = 1;
@@ -242,8 +269,9 @@ int susfs_sus_path_init_hooks(void)
     /* Emit to dmesg so userspace can verify the hooks are active. */
     if (susfs_printk) {
         susfs_printk("susfs_kpm: sus_path syscalls hooked "
-                     "(openat=%d faccessat=%d newfstatat=%d)\n",
-                     openat_hooked, faccessat_hooked, newfstatat_hooked);
+                     "(openat=%d faccessat=%d newfstatat=%d) NR_openat=%d NR_faccessat=%d NR_newfstatat=%d\n",
+                     openat_hooked, faccessat_hooked, newfstatat_hooked,
+                     __NR_openat, __NR_faccessat, __NR_newfstatat);
     }
 
     return rc;
