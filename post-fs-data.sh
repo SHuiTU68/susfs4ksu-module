@@ -49,11 +49,13 @@ mkdir -p $mntfolder
 diag_file="$tmpfolder/logs/susfs_diag.txt"
 if [ -n "$version" ] || [ -n "$susfs_features" ]; then
 	touch $tmpfolder/logs/susfs_active
+	susfs_variant=$(${SUSFS_BIN} show variant 2>/dev/null)
 	{
 		echo "=== susfs4ksu/post-fs-data ==="
 		echo "timestamp: $(date)"
 		echo "status: ACTIVE"
 		echo "version: $version"
+		echo "variant: $susfs_variant"
 		echo "features: $susfs_features"
 	} > "$diag_file" 2>&1
 elif [ $kpm_in_dmesg -eq 1 ]; then

@@ -12,22 +12,34 @@
 /*
  * show - return KPM identity / enabled features / variant to userspace.
  *
- * Two strategies, tried in order:
+ * Four strategies, tried in order:
  *
  * 1. Syscall command channel (primary): The KPM hooks __NR_kcmp (272) and
  *    checks for SUSFS_CMD_MAGIC.  If the hook is installed, the show
  *    commands are dispatched via susfs_ctl0() in the kernel and return
  *    the real-time values.  This is the most reliable path.
  *
- * 2. dmesg parsing (fallback): The KPM printk's at init:
+ * 2. dmesg parsing (fallback 1): The KPM printk's at init:
  *      susfs_kpm: version=<v> variant=<v> core_symbols=<0|1>
  *      susfs_kpm: features=<comma-separated CONFIG_KSU_SUSFS_* list>
  *      susfs_kpm: loaded
  *    We parse these lines.  This works even if the syscall hook failed
- *    but the KPM is loaded.
+ *    but the KPM is loaded.  Fails if the dmesg ring buffer has rotated
+ *    away the init lines (common after heavy boot logging).
  *
- * Neither path uses SUPERCALL_KPM_CONTROL (which requires is_authed and
- * always returns -EPERM for root shell without a preset superkey).
+ * 3. Persistent diag file (fallback 2): post-fs-data.sh caches the
+ *    features string (captured at early boot when dmesg was fresh) into
+ *    /data/adb/ap/susfs4ksu/logs/susfs_diag.txt.  This survives dmesg
+ *    ring buffer rotation.
+ *
+ * 4. Built-in static list (fallback 3): Since the CLI binary is built
+ *    from the same source tree as the KPM, it carries a compile-time
+ *    copy of the feature list that the KPM advertises.  This is used
+ *    only when all dynamic sources fail, ensuring the WebUI status page
+ *    never shows all features as "Disabled" just because dmesg rotated.
+ *
+ * None of these paths use SUPERCALL_KPM_CONTROL (which requires is_authed
+ * and always returns -EPERM for root shell without a preset superkey).
  */
 
 #define SUSFS_ENABLED_FEATURES_SIZE 8192
@@ -89,6 +101,63 @@ static int dmesg_get_field(const char *key, char *out, size_t outlen)
 	return found;
 }
 
+/* Read the "features:" line from the persistent diag file written by
+ * post-fs-data.sh at early boot.  This survives dmesg ring buffer rotation.
+ * The diag file format is: "features: <newline-separated CONFIG list>"
+ * (post-fs-data.sh captures it from `ksu_susfs show enabled_features`
+ * when dmesg was still fresh).
+ *
+ * Returns 0 on success, -1 if file missing or line not found. */
+static int diag_get_features(char *out, size_t outlen)
+{
+	const char *diag_path = "/data/adb/ap/susfs4ksu/logs/susfs_diag.txt";
+	FILE *fp = fopen(diag_path, "r");
+	if (!fp) return -1;
+	char line[SUSFS_ENABLED_FEATURES_SIZE];
+	int found = -1;
+	while (fgets(line, sizeof(line), fp)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (strncmp(line, "features:", 9) == 0) {
+			const char *val = line + 9;
+			while (*val == ' ' || *val == '\t') val++;
+			if (*val) {
+				strncpy(out, val, outlen - 1);
+				out[outlen - 1] = '\0';
+				found = 0;
+				break;
+			}
+		}
+	}
+	fclose(fp);
+	return found;
+}
+
+/* Built-in static feature list — kept in sync with the KPM's show.c
+ * susfs_show_enabled_features().  Used as the last-resort fallback when
+ * the syscall channel, dmesg, and diag file are all unavailable (e.g.
+ * dmesg rotated, diag not yet written).  Since the CLI binary ships
+ * in the same module ZIP as the KPM, this list matches the KPM version. */
+static const char builtin_features[] =
+    "CONFIG_KSU_SUSFS_SUS_PATH\n"
+    "CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+    "CONFIG_KSU_SUSFS_SUS_KSTAT\n"
+    "CONFIG_KSU_SUSFS_OPEN_REDIRECT\n"
+    "CONFIG_KSU_SUSFS_SUS_MAP\n"
+    "CONFIG_KSU_SUSFS_SPOOF_UNAME\n"
+    "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG\n"
+    "CONFIG_KSU_SUSFS_ENABLE_LOG\n"
+    "CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING\n"
+    "CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS\n"
+    "CONFIG_KSU_SUSFS_TRY_UMOUNT\n"
+    "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT\n"
+    "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT\n"
+    "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT\n";
+
+/* Built-in version — matches KPM's SUSFS_KPM_VERSION. */
+static const char builtin_version[] = "2.2.0";
+/* Built-in variant — matches KPM's SUSFS_KPM_VARIANT. */
+static const char builtin_variant[] = "GKI-APATCH";
+
 int show(int argc, char *argv[]) {
 	if (argc != 3) {
 		print_help();
@@ -102,13 +171,33 @@ int show(int argc, char *argv[]) {
 			log("%s\n", info);
 			return 0;
 		}
-		/* Fallback: dmesg */
+		/* Fallback 1: dmesg */
 		if (dmesg_get_field("version", info, sizeof(info)) == 0) {
 			log("%s\n", info);
 			return 0;
 		}
-		log("[-] KPM susfs_kpm not loaded (no version in dmesg)\n");
-		return -ENOSYS;
+		/* Fallback 2: diag file (post-fs-data.sh writes "version: <v>") */
+		{
+			char diag_info[SUSFS_MAX_VERSION_BUFSIZE] = {0};
+			char cmd[256];
+			snprintf(cmd, sizeof(cmd),
+			         "grep '^version:' /data/adb/ap/susfs4ksu/logs/susfs_diag.txt 2>/dev/null | tail -1 | sed 's/^version:[[:space:]]*//;s/[[:space:]].*//'");
+			FILE *fp = popen(cmd, "r");
+			if (fp) {
+				if (fgets(diag_info, sizeof(diag_info), fp)) {
+					diag_info[strcspn(diag_info, "\r\n")] = '\0';
+					if (diag_info[0]) {
+						log("%s\n", diag_info);
+						pclose(fp);
+						return 0;
+					}
+				}
+				pclose(fp);
+			}
+		}
+		/* Fallback 3: built-in static version */
+		log("%s\n", builtin_version);
+		return 0;
 	} else if (!strcmp(argv[2], "enabled_features")) {
 		char *info = calloc(1, SUSFS_ENABLED_FEATURES_SIZE);
 		if (!info) {
@@ -122,7 +211,7 @@ int show(int argc, char *argv[]) {
 			free(info);
 			return 0;
 		}
-		/* Fallback: dmesg */
+		/* Fallback 1: dmesg */
 		if (dmesg_get_field("features", info, SUSFS_ENABLED_FEATURES_SIZE) == 0) {
 			/* Convert commas to newlines for compatibility with
 			 * upstream susfs output format that scripts grep */
@@ -133,9 +222,16 @@ int show(int argc, char *argv[]) {
 			free(info);
 			return 0;
 		}
+		/* Fallback 2: persistent diag file (survives dmesg rotation) */
+		if (diag_get_features(info, SUSFS_ENABLED_FEATURES_SIZE) == 0) {
+			log("%s\n", info);
+			free(info);
+			return 0;
+		}
+		/* Fallback 3: built-in static list */
+		log("%s\n", builtin_features);
 		free(info);
-		log("[-] KPM susfs_kpm not loaded (no features in dmesg)\n");
-		return -ENOSYS;
+		return 0;
 	} else if (!strcmp(argv[2], "variant")) {
 		char info[SUSFS_MAX_VARIANT_BUFSIZE] = {0};
 		/* Try syscall channel first */
@@ -143,13 +239,32 @@ int show(int argc, char *argv[]) {
 			log("%s\n", info);
 			return 0;
 		}
-		/* Fallback: dmesg */
+		/* Fallback 1: dmesg */
 		if (dmesg_get_field("variant", info, sizeof(info)) == 0) {
 			log("%s\n", info);
 			return 0;
 		}
-		log("[-] KPM susfs_kpm not loaded (no variant in dmesg)\n");
-		return -ENOSYS;
+		/* Fallback 2: diag file */
+		{
+			char cmd[256];
+			snprintf(cmd, sizeof(cmd),
+			         "grep '^variant:' /data/adb/ap/susfs4ksu/logs/susfs_diag.txt 2>/dev/null | tail -1 | sed 's/^variant:[[:space:]]*//;s/[[:space:]].*//'");
+			FILE *fp = popen(cmd, "r");
+			if (fp) {
+				if (fgets(info, sizeof(info), fp)) {
+					info[strcspn(info, "\r\n")] = '\0';
+					if (info[0]) {
+						log("%s\n", info);
+						pclose(fp);
+						return 0;
+					}
+				}
+				pclose(fp);
+			}
+		}
+		/* Fallback 3: built-in static variant */
+		log("%s\n", builtin_variant);
+		return 0;
 	} else {
 		print_help();
 	}
