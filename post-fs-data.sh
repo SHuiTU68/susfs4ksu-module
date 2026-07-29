@@ -220,27 +220,34 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
             umount -l "$i" 2>/dev/null && echo "[try_umount]: umount $i" >> "$logfile1"
         done
     fi
-    # (b) auto_try_umount — scan for suspicious bind mounts and umount them.
-    #     Controlled by WebUI toggle (auto_try_umount=1 in config.sh).
-    if [ "$auto_try_umount" = "1" ] && [ ! -f /data/adb/susfs_no_auto_add_try_umount_for_bind_mount ]; then
-        echo "[auto_try_umount]: scanning /proc/mounts for suspicious bind mounts" >> "$logfile1"
-        ${SUSFS_BIN} auto_add_try_umount_for_bind_mount 2>/dev/null
-        for suspect in \
-            /data/adb/modules \
-            /data/adb/ap \
-            /data/adb/ksu \
-            /debug_ramdisk \
-            /sbin
-        do
-            awk -v s="$suspect" '$1 ~ s {print $2}' /proc/mounts 2>/dev/null | while read -r mp; do
-                [ -z "$mp" ] && continue
-                case "$mp" in
-                    /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
-                esac
-                ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null && echo "[try_umount]: susfs4ksu/post-fs-data auto $mp" >> "$logfile1"
-                umount -l "$mp" 2>/dev/null && echo "[try_umount]: umount $mp" >> "$logfile1"
+    # (b) Auto-scan for suspicious bind mounts and umount them.
+    #     Triggered by ANY of: auto_try_umount, auto_mount, auto_bind,
+    #     auto_umount_bind — they all control the same userspace scan in
+    #     this KPM (original susfs had separate kernel hooks for each;
+    #     we use one unified /proc/mounts scan).
+    #     Skip if the disable sentinel file is present.
+    if [ ! -f /data/adb/susfs_no_auto_add_try_umount_for_bind_mount ]; then
+        if [ "$auto_try_umount" = "1" ] || [ "$auto_mount" = "1" ] || \
+           [ "$auto_bind" = "1" ] || [ "$auto_umount_bind" = "1" ]; then
+            echo "[auto_try_umount]: scanning /proc/mounts for suspicious bind mounts (auto_try_umount=$auto_try_umount auto_mount=$auto_mount auto_bind=$auto_bind auto_umount_bind=$auto_umount_bind)" >> "$logfile1"
+            ${SUSFS_BIN} auto_add_try_umount_for_bind_mount 2>/dev/null
+            for suspect in \
+                /data/adb/modules \
+                /data/adb/ap \
+                /data/adb/ksu \
+                /debug_ramdisk \
+                /sbin
+            do
+                awk -v s="$suspect" '$1 ~ s {print $2}' /proc/mounts 2>/dev/null | while read -r mp; do
+                    [ -z "$mp" ] && continue
+                    case "$mp" in
+                        /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
+                    esac
+                    ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null && echo "[try_umount]: susfs4ksu/post-fs-data auto $mp" >> "$logfile1"
+                    umount -l "$mp" 2>/dev/null && echo "[try_umount]: umount $mp" >> "$logfile1"
+                done
             done
-        done
+        fi
     fi
 fi
 
