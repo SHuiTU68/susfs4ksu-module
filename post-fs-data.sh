@@ -113,6 +113,12 @@ umount_for_zygote_iso_service=0
 avc_log_spoofing=0
 hide_sus_mnts_for_all_or_non_su_procs=0
 auto_try_umount=0
+auto_mount=0
+auto_bind=0
+auto_umount_bind=0
+skip_legit_mounts=0
+turn_off_after_boot_completed=0
+try_umount_zygote=0
 [ -f $PERSISTENT_DIR/config.sh ] && . $PERSISTENT_DIR/config.sh
 
 echo "susfs4ksu/post-fs-data: [logging_initialized]" > $logfile1
@@ -194,7 +200,7 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
     if grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" > /dev/null 2>&1; then
         grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" | while read -r i; do
             [ -z "$i" ] && continue
-            ${SUSFS_BIN} add_sus_mount "$i" 2>/dev/null
+            ${SUSFS_BIN} add_sus_mount "$i" 2>/dev/null && echo "[sus_mount]: susfs4ksu/post-fs-data $i" >> "$logfile1"
             # If hide_sus_mnts_for_all_or_non_su_procs is on, actually detach
             # the mount so it disappears from /proc/mounts for ALL processes.
             if [ "$hide_sus_mnts_for_all_or_non_su_procs" -ge 1 ] 2>/dev/null; then
@@ -210,7 +216,7 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
     if grep -v "#" "$PERSISTENT_DIR/try_umount.txt" > /dev/null 2>&1; then
         grep -v "#" "$PERSISTENT_DIR/try_umount.txt" | while read -r i; do
             [ -z "$i" ] && continue
-            ${SUSFS_BIN} add_try_umount "$i" 1 2>/dev/null
+            ${SUSFS_BIN} add_try_umount "$i" 1 2>/dev/null && echo "[try_umount]: susfs4ksu/post-fs-data $i" >> "$logfile1"
             umount -l "$i" 2>/dev/null && echo "[try_umount]: umount $i" >> "$logfile1"
         done
     fi
@@ -231,8 +237,8 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
                 case "$mp" in
                     /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
                 esac
-                ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null
-                umount -l "$mp" 2>/dev/null && echo "[auto_try_umount]: umount $mp" >> "$logfile1"
+                ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null && echo "[try_umount]: susfs4ksu/post-fs-data auto $mp" >> "$logfile1"
+                umount -l "$mp" 2>/dev/null && echo "[try_umount]: umount $mp" >> "$logfile1"
             done
         done
     fi

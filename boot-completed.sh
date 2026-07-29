@@ -441,15 +441,15 @@ if [ -n "$version" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 1 ] && [ "$SUSFS_DECIMAL_SUB
 fi
 
 # Generate susfs stats
-sus_mount_count=$(($(grep -ciE "set SUS_MOUNT|to LH_SUS_MOUNT" $logfile ) + $(grep -cE "^[25][0-9]{5,9} .* (KSU|shared).*$" /proc/1/mountinfo )))
+# NOTE: The original susfs greps kernel dmesg ($logfile) for patterns like
+# "set SUS_MOUNT", "to LH_TRY_UMOUNT_PATH", "AS_FLAGS_SUS_MAP".  This KPM
+# does NOT output those kernel log formats — it uses userspace logging to
+# susfs1.log ($logfile1) with tags like [sus_mount], [try_umount], [sus_map].
+# We therefore grep $logfile1 for the actual log tags we write.
 rm ${tmpfolder}/susfs_stats.txt
-echo sus_map=$(grep -ci 'AS_FLAGS_SUS_MAP' $logfile ) >> ${tmpfolder}/susfs_stats.txt
-echo sus_mount=$sus_mount_count >> ${tmpfolder}/susfs_stats.txt
-if [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
-	echo try_umount=$(grep -ci 'try_umount (KSUD)' $logfile1 ) >> ${tmpfolder}/susfs_stats.txt
-else
-	echo try_umount=$(grep -ci 'to LH_TRY_UMOUNT_PATH' $logfile ) >> ${tmpfolder}/susfs_stats.txt
-fi
+echo sus_map=$(grep -ci 'sus_map' $logfile1 ) >> ${tmpfolder}/susfs_stats.txt
+echo sus_mount=$(grep -ci 'sus_mount' $logfile1 ) >> ${tmpfolder}/susfs_stats.txt
+echo try_umount=$(grep -ci 'try_umount' $logfile1 ) >> ${tmpfolder}/susfs_stats.txt
 rm ${tmpfolder}/susfs_stats1.txt
 echo sus_map=$(grep -ci 'sus_map' $logfile1 ) >> ${tmpfolder}/susfs_stats1.txt
 echo sus_mount=$(grep -ci 'sus_mount' $logfile1 ) >> ${tmpfolder}/susfs_stats1.txt
