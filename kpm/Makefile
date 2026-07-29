@@ -42,7 +42,8 @@ INCLUDE_DIRS := . include \
                 $(KP_DIR)/kernel/patch/include \
                 $(KP_DIR)/kernel/linux/include \
                 $(KP_DIR)/kernel/linux/arch/arm64/include \
-                $(KP_DIR)/kernel/linux/tools/arch/arm64/include
+                $(KP_DIR)/kernel/linux/tools/arch/arm64/include \
+                $(KP_DIR)/kernel/linux/security/selinux/include
 INCLUDE_FLAGS := $(foreach dir,$(INCLUDE_DIRS),-I$(dir))
 
 # Flags reproduced from AuditPatch-KPM/Makefile.  Rationale:
@@ -106,7 +107,8 @@ KPM_SRCS := \
     features/set_uname.c \
     features/set_cmdline.c \
     features/flags.c \
-    features/show.c
+    features/show.c \
+    features/selinux_hook.c
 
 KPM_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(KPM_SRCS))
 

@@ -12,6 +12,7 @@
   <string id="enabled_label">啟用</string>
   <string id="disabled_label">停用</string>
   <string id="deprecated_label">棄用</string>
+  <string id="partial_label">部分</string>
   <string id="unknown_label">不明</string>
   <string id="help_label">說明</string>
   <string id="send_logs_label">傳送記錄檔</string>
@@ -50,6 +51,7 @@
   <string id="spoof_cmdline_feature_label">偽裝 Cmdline/Bootconfig</string>
   <string id="open_redirect_feature_label">開啟時重導向</string>
   <string id="enable_log_feature_label">記錄檔功能</string>
+  <string id="selinux_hook_feature_label">SELinux 規則隱藏</string>
   <string id="auto_default_mount_feature_label">自動預設掛載</string>
   <string id="auto_bind_mount_feature_label">自動綁定掛載</string>
   <string id="auto_try_umount_bind_feature_label">自動嘗試卸載綁定</string>

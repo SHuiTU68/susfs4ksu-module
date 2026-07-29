@@ -54,12 +54,14 @@
 #define CMD_SUSFS_SHOW_VERSION          0x555e1
 #define CMD_SUSFS_SHOW_ENABLED_FEATURES 0x555e2
 #define CMD_SUSFS_SHOW_VARIANT          0x555e3
+#define CMD_SUSFS_SHOW_SELINUX_MODE     0x60030
 
 void show_print_help(void){
-	log("    show <version|enabled_features|variant>\n");
+	log("    show <version|enabled_features|variant|selinux_mode>\n");
 	log("      |--> version: show the current susfs version implemented in kernel\n");
 	log("      |--> enabled_features: show the current implemented susfs features in kernel\n");
 	log("      |--> variant: show the current variant: GKI or NON-GKI\n");
+	log("      |--> selinux_mode: show the selinux_hook working mode (NORMAL-K / PARTIAL_FALLBACK / FULL_FALLBACK)\n");
 	log("\n");
 }
 
@@ -282,6 +284,48 @@ int show(int argc, char *argv[]) {
 		}
 		/* Fallback 3: built-in static variant */
 		log("%s\n", builtin_variant);
+		return 0;
+	} else if (!strcmp(argv[2], "selinux_mode")) {
+		/* selinux_hook working mode.  The KPM snapshots the clean SELinux
+		 * policy at load and hooks AV queries to hide Magisk-injected rules.
+		 * Returns one of:
+		 *   NORMAL-K          - hooks installed, clean policy snapshotted
+		 *   PARTIAL_FALLBACK  - some hooks missing, partial protection
+		 *   FULL_FALLBACK     - hooks not installed, no protection
+		 *   inactive          - KPM not loaded / dmesg unavailable
+		 *
+		 * Try syscall channel first, then dmesg, then diag file. */
+		char mode[32] = {0};
+		/* Try syscall channel first */
+		if (syscall_show(CMD_SUSFS_SHOW_SELINUX_MODE, mode, sizeof(mode)) == 0) {
+			log("%s\n", mode);
+			return 0;
+		}
+		/* Fallback 1: dmesg — KPM prints "susfs_kpm: selinux_hook=<mode>" */
+		if (dmesg_get_field("selinux_hook", mode, sizeof(mode)) == 0) {
+			log("%s\n", mode);
+			return 0;
+		}
+		/* Fallback 2: diag file */
+		{
+			char cmd[256];
+			snprintf(cmd, sizeof(cmd),
+			         "grep '^selinux_hook:' /data/adb/ap/susfs4ksu/logs/susfs_diag.txt 2>/dev/null | tail -1 | sed 's/^selinux_hook:[[:space:]]*//;s/[[:space:]].*//'");
+			FILE *fp = popen(cmd, "r");
+			if (fp) {
+				if (fgets(mode, sizeof(mode), fp)) {
+					mode[strcspn(mode, "\r\n")] = '\0';
+					if (mode[0]) {
+						log("%s\n", mode);
+						pclose(fp);
+						return 0;
+					}
+				}
+				pclose(fp);
+			}
+		}
+		/* Fallback 3: not available */
+		log("inactive\n");
 		return 0;
 	} else {
 		print_help();
