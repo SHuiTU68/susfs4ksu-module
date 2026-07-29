@@ -60,33 +60,25 @@ int susfs_set_cmdline_or_bootconfig(const char *content)
 
 int susfs_set_cmdline_init_hooks(void)
 {
+    /* before_cmdline_read is an empty stub.  Hooking cmdline_proc_show
+     * (fired on every /proc/cmdline read) just to do nothing adds a
+     * trampoline tax.  Skip until the real spoofing logic is implemented. */
     cmdline_read_addr = (void *)kallsyms_lookup_name("cmdline_proc_show");
     if (!cmdline_read_addr)
         cmdline_read_addr = (void *)kallsyms_lookup_name("boot_config_show");
-    if (!cmdline_read_addr) {
-        logke("susfs_kpm: set_cmdline: no show symbol, inert\n");
-        return 0;
+    if (cmdline_read_addr) {
+        logki("susfs_kpm: set_cmdline: show symbol found @ %px "
+              "(not hooked — callback is a stub)\n", cmdline_read_addr);
+    } else {
+        logki("susfs_kpm: set_cmdline: no show symbol (inert)\n");
     }
-    hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
-    HIDE_PTR(wrap);
-    hook_err_t err = wrap(cmdline_read_addr, 2,
-                          (void *)before_cmdline_read, 0, 0);
-    if (err != HOOK_NO_ERR) {
-        logke("susfs_kpm: set_cmdline hook failed: %d\n", err);
-        return (int)err;
-    }
-    logki("susfs_kpm: set_cmdline hooked @ %px\n", cmdline_read_addr);
     return 0;
 }
 
 void susfs_set_cmdline_cleanup(void)
 {
-    if (cmdline_read_addr) {
-        void (*un)(void *, void *, void *, int) = hook_unwrap_remove;
-        HIDE_PTR(un);
-        un(cmdline_read_addr, (void *)before_cmdline_read, 0, 1);
-        cmdline_read_addr = 0;
-    }
+    /* No hook installed — nothing to unhook. */
+    cmdline_read_addr = 0;
     if (fake_content) {
         susfs_kfree(fake_content);
         fake_content = 0;

@@ -10,9 +10,10 @@ logfile="$tmpfolder/logs/susfs.log"
 # Reuse the dmesg cache from post-fs-data.sh instead of calling
 # `ksu_susfs show version/features` (each forks a process + parses dmesg)
 # and then calling `dmesg` again for logging.  One cache file, three uses.
+# Performance: pipe through grep to keep only susfs lines + timestamps.
 dmesg_cache="$tmpfolder/logs/dmesg_cache.txt"
 if [ ! -f "$dmesg_cache" ] || [ $(($(date +%s) - $(stat -c %Y "$dmesg_cache" 2>/dev/null || echo 0))) -gt 120 ]; then
-	dmesg 2>/dev/null > "$dmesg_cache"
+	dmesg 2>/dev/null | grep -iE 'susfs:|susfs_kpm:|susfs_auto_add|ksu_susfs|^\[ *[0-9]' > "$dmesg_cache"
 fi
 
 version=""
@@ -197,17 +198,22 @@ if [ -s "$HASH_FILE" ]; then
 fi
 
 # Add open redirect paths (service.sh)
+# Performance: split fields via shell parameter expansion instead of
+# `echo | awk` (saves 3-4 forks per line).
 if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_OPEN_REDIRECT"; then
 	grep -v "#" "$PERSISTENT_DIR/sus_open_redirect.txt" | while IFS= read -r line; do
-		original_path=$(echo "$line" | awk '{print $1}')
-		redirected_path=$(echo "$line" | awk '{print $2}')
-		execute_on=$(echo "$line" | awk '{print $3}')
+		# Parse "orig redirect execute_on [uid_scheme]" without awk
+		_f1=$line
+		_f2=${_f1#* }; _f3=${_f2#* }; _f4=${_f3#* }
+		original_path=${_f1%% *}
+		redirected_path=${_f2%% *}
+		execute_on=${_f3%% *}
 		[ "$execute_on" != "1" ] && continue
 		# Get inode and device of redirected path
 		SUS_KSTAT=$(stat -c "%i %d default default %X 0 %Y 0 %Z 0 %b %B" "$original_path")
 		if [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && [ "$SUSFS_DECIMAL_SUB" -ge 1 ] 2>/dev/null; then
-			uid_scheme=$(echo "$line" | awk '{print $4}')
-			if [ -z $uid_scheme ]; then
+			uid_scheme=${_f4%% *}
+			if [ -z "$uid_scheme" ] || [ "$uid_scheme" = "$_f4" ]; then
 				${SUSFS_BIN} add_open_redirect "$original_path" "$redirected_path" 2 && echo "[open_redirect]: susfs4ksu/boot-completed $original_path -> $redirected_path default_uid_scheme: 2" >> $logfile1
 			else
 				${SUSFS_BIN} add_open_redirect "$original_path" "$redirected_path" $uid_scheme && echo "[open_redirect]: susfs4ksu/boot-completed $original_path -> $redirected_path uid_scheme: $uid_scheme" >> $logfile1

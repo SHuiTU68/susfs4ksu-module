@@ -105,33 +105,27 @@ int susfs_add_sus_kstat(const char *path, unsigned long target_ino,
 
 int susfs_sus_kstat_init_hooks(void)
 {
+    /* before_vfs_statx is an empty stub.  Hooking vfs_statx (fired on
+     * every stat/statx call — thousands per second during app launch
+     * and file scanning) just to do nothing adds a trampoline tax on
+     * each stat.  Skip until the real kstat-spoofing logic is
+     * implemented (needs per-kernel struct kstat offsets). */
     vfs_statx_addr = (void *)kallsyms_lookup_name("vfs_statx");
     if (!vfs_statx_addr)
         vfs_statx_addr = (void *)kallsyms_lookup_name("vfs_statx_fd");
-    if (!vfs_statx_addr) {
-        logke("susfs_kpm: sus_kstat: no vfs_statx symbol, inert\n");
-        return 0;
+    if (vfs_statx_addr) {
+        logki("susfs_kpm: sus_kstat: vfs_statx found @ %px "
+              "(not hooked — callback is a stub)\n", vfs_statx_addr);
+    } else {
+        logki("susfs_kpm: sus_kstat: no vfs_statx symbol (inert)\n");
     }
-    hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
-    HIDE_PTR(wrap);
-    hook_err_t err = wrap(vfs_statx_addr, 2,
-                          (void *)before_vfs_statx, 0, 0);
-    if (err != HOOK_NO_ERR) {
-        logke("susfs_kpm: sus_kstat hook failed: %d\n", err);
-        return (int)err;
-    }
-    logki("susfs_kpm: sus_kstat hooked @ %px\n", vfs_statx_addr);
     return 0;
 }
 
 void susfs_sus_kstat_cleanup(void)
 {
-    if (vfs_statx_addr) {
-        void (*un)(void *, void *, void *, int) = hook_unwrap_remove;
-        HIDE_PTR(un);
-        un(vfs_statx_addr, (void *)before_vfs_statx, 0, 1);
-        vfs_statx_addr = 0;
-    }
+    /* No hook installed — nothing to unhook. */
+    vfs_statx_addr = 0;
     susfs__raw_spin_lock(&sus_kstat_lock);
     struct sus_kstat_entry *e, *tmp;
     list_for_each_entry_safe(e, tmp, &sus_kstat_list, list) {

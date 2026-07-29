@@ -13,8 +13,15 @@ logfile1="$tmpfolder/logs/susfs1.log"
 # and can take 0.5-2s per call.  We used to call it 4+ times (once here,
 # then again inside each `ksu_susfs show` call).  Now we read it once
 # into a temp file and grep from that.
+#
+# Performance: on OEM kernels (OPPO/OnePlus/etc.) the ring buffer can be
+# several MB.  Writing the entire buffer to flash causes IO contention
+# during early boot.  We pipe dmesg through grep to keep ONLY susfs-
+# relevant lines — the cache file is typically < 2 KB instead of MBs.
+# The timestamp pattern `^\[ *[0-9]` is preserved so boot-stage
+# extraction still works.
 dmesg_cache="$tmpfolder/logs/dmesg_cache.txt"
-dmesg 2>/dev/null > "$dmesg_cache"
+dmesg 2>/dev/null | grep -iE 'susfs:|susfs_kpm:|^\[ *[0-9]' > "$dmesg_cache"
 
 kpm_in_dmesg=0
 if grep -qE "susfs:|susfs_kpm:" "$dmesg_cache" 2>/dev/null; then

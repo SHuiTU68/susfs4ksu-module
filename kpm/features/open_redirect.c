@@ -89,33 +89,34 @@ int susfs_add_open_redirect(const char *target, const char *redirected,
 
 int susfs_open_redirect_init_hooks(void)
 {
+    /* The before_path_openat_or callback is an empty stub — hooking
+     * path_openat (the hottest kernel function: every file open goes
+     * through it, thousands of times per second) just to do nothing
+     * imposes a measurable trampoline tax on every open() syscall.
+     *
+     * Until the actual redirect logic is implemented (needs per-kernel
+     * nameidata offsets), we do NOT install the hook.  The callback
+     * function and list management remain so a future implementation
+     * only needs to flip this block back on. */
     path_openat_addr = (void *)kallsyms_lookup_name("path_openat");
     if (!path_openat_addr)
         path_openat_addr = (void *)kallsyms_lookup_name("do_filp_open");
-    if (!path_openat_addr) {
-        logke("susfs_kpm: open_redirect: no hook target found\n");
-        return -ENOSYS;
+    if (path_openat_addr) {
+        logki("susfs_kpm: open_redirect: target found @ %px "
+              "(not hooked — callback is a stub, hooking path_openat "
+              "would add per-open overhead with no effect)\n",
+              path_openat_addr);
+    } else {
+        logki("susfs_kpm: open_redirect: no hook target found (inert)\n");
     }
-    hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
-    HIDE_PTR(wrap);
-    hook_err_t err = wrap(path_openat_addr, 2,
-                          (void *)before_path_openat_or, 0, 0);
-    if (err != HOOK_NO_ERR) {
-        logke("susfs_kpm: open_redirect hook failed: %d\n", err);
-        return (int)err;
-    }
-    logki("susfs_kpm: open_redirect hooked @ %px\n", path_openat_addr);
     return 0;
 }
 
 void susfs_open_redirect_cleanup(void)
 {
-    if (path_openat_addr) {
-        void (*un)(void *, void *, void *, int) = hook_unwrap_remove;
-        HIDE_PTR(un);
-        un(path_openat_addr, (void *)before_path_openat_or, 0, 1);
-        path_openat_addr = 0;
-    }
+    /* No hook was installed in init (callback is a stub), so nothing to
+     * unhook.  Just free the entry list. */
+    path_openat_addr = 0;
     susfs__raw_spin_lock(&open_redirect_lock);
     struct open_redirect_entry *e, *tmp;
     list_for_each_entry_safe(e, tmp, &open_redirect_list, list) {

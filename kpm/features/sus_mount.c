@@ -146,35 +146,25 @@ int susfs_auto_add_try_umount_for_bind_mount(void)
 
 int susfs_sus_mount_init_hooks(void)
 {
-    /* show_mountinfo is the seq show callback for mountinfo; on 6.6 it is
-     * a static function inside fs/proc_namespace.c and may or may not be
-     * in kallsyms.  We try common names. */
+    /* before_show_mountinfo is an empty stub.  Hooking show_mountinfo
+     * (fired on every /proc/mounts and /proc/self/mountinfo read —
+     * vold, system_server, and apps read these frequently) just to do
+     * nothing adds a trampoline tax on each read.  Skip until the real
+     * filtering logic is implemented (needs struct mount offsets). */
     show_mountinfo_addr = (void *)kallsyms_lookup_name("show_mountinfo");
     if (!show_mountinfo_addr)
         show_mountinfo_addr = (void *)kallsyms_lookup_name("m_show");
-    if (!show_mountinfo_addr) {
-        logke("susfs_kpm: sus_mount: no seq show symbol found, "
-              "mount hiding will be inert\n");
-        return 0;  /* not fatal — toggle still works for future hooks */
+    if (show_mountinfo_addr) {
+        logki("susfs_kpm: sus_mount: show_mountinfo found @ %px "
+              "(not hooked — callback is a stub)\n", show_mountinfo_addr);
+    } else {
+        logki("susfs_kpm: sus_mount: no seq show symbol (inert)\n");
     }
-    hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
-    HIDE_PTR(wrap);
-    hook_err_t err = wrap(show_mountinfo_addr, 2,
-                          (void *)before_show_mountinfo, 0, 0);
-    if (err != HOOK_NO_ERR) {
-        logke("susfs_kpm: sus_mount hook failed: %d\n", err);
-        return (int)err;
-    }
-    logki("susfs_kpm: sus_mount hooked @ %px\n", show_mountinfo_addr);
     return 0;
 }
 
 void susfs_sus_mount_cleanup(void)
 {
-    if (show_mountinfo_addr) {
-        void (*un)(void *, void *, void *, int) = hook_unwrap_remove;
-        HIDE_PTR(un);
-        un(show_mountinfo_addr, (void *)before_show_mountinfo, 0, 1);
-        show_mountinfo_addr = 0;
-    }
+    /* No hook installed — nothing to unhook. */
+    show_mountinfo_addr = 0;
 }

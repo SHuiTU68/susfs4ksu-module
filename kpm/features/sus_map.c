@@ -64,36 +64,27 @@ int susfs_add_sus_map(const char *path)
 
 int susfs_sus_map_init_hooks(void)
 {
-    /* On 6.6, /proc/<pid>/maps uses seq_operations proc_pid_maps_op, whose
-     * .show = proc_pid_maps_show.  May be in kallsyms as
-     * "proc_pid_maps_show" or wrapped in a static. */
+    /* before_maps_show is an empty stub.  Hooking proc_pid_maps_show
+     * (fired on every /proc/self/maps read — extremely frequent during
+     * app startup, the dynamic linker and ART read it heavily) just to
+     * do nothing adds a trampoline tax on each maps read.  Skip until
+     * the real vma-filtering logic is implemented. */
     proc_pid_maps_show_addr = (void *)kallsyms_lookup_name("proc_pid_maps_show");
     if (!proc_pid_maps_show_addr)
         proc_pid_maps_show_addr = (void *)kallsyms_lookup_name("proc_maps_show");
-    if (!proc_pid_maps_show_addr) {
-        logke("susfs_kpm: sus_map: no maps show symbol, inert\n");
-        return 0;
+    if (proc_pid_maps_show_addr) {
+        logki("susfs_kpm: sus_map: show symbol found @ %px "
+              "(not hooked — callback is a stub)\n", proc_pid_maps_show_addr);
+    } else {
+        logki("susfs_kpm: sus_map: no maps show symbol (inert)\n");
     }
-    hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
-    HIDE_PTR(wrap);
-    hook_err_t err = wrap(proc_pid_maps_show_addr, 2,
-                          (void *)before_maps_show, 0, 0);
-    if (err != HOOK_NO_ERR) {
-        logke("susfs_kpm: sus_map hook failed: %d\n", err);
-        return (int)err;
-    }
-    logki("susfs_kpm: sus_map hooked @ %px\n", proc_pid_maps_show_addr);
     return 0;
 }
 
 void susfs_sus_map_cleanup(void)
 {
-    if (proc_pid_maps_show_addr) {
-        void (*un)(void *, void *, void *, int) = hook_unwrap_remove;
-        HIDE_PTR(un);
-        un(proc_pid_maps_show_addr, (void *)before_maps_show, 0, 1);
-        proc_pid_maps_show_addr = 0;
-    }
+    /* No hook installed — nothing to unhook. */
+    proc_pid_maps_show_addr = 0;
     susfs__raw_spin_lock(&sus_map_lock);
     struct sus_map_entry *e, *tmp;
     list_for_each_entry_safe(e, tmp, &sus_map_list, list) {
