@@ -25,9 +25,7 @@ CONFIG_KSU_SUSFS_ENABLE_LOG
 CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
 CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
 CONFIG_KSU_SUSFS_TRY_UMOUNT
-CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
-CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
-CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT"
+CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT"
 fi
 # Fallback version if show version fails
 if [ -z "$version" ]; then
@@ -55,6 +53,12 @@ hide_revanced=0
 spoof_uname=0
 hide_sus_mnts_for_all_or_non_su_procs=0
 emulate_vold_app_data=0
+auto_try_umount=0
+skip_legit_mounts=0
+spoof_cmdline=0
+force_hide_lsposed=0
+umount_for_zygote_iso_service=0
+avc_log_spoofing=0
 [ -f $PERSISTENT_DIR/config.sh ] && . $PERSISTENT_DIR/config.sh
 
 # update description
@@ -199,11 +203,14 @@ EOF
 fi
 
 # Auto try_umount (v1.5.5+)
+# NOTE: The actual `umount -l` is done in post-fs-data.sh (before zygote).
+# This block only re-registers susfs mount paths with the KPM for
+# /proc/mounts filtering and logs them so the stats count is non-zero.
+# Do NOT use `return` here — it would exit the whole script (not in a function).
 [ $auto_try_umount = 1 ] && {
 	# Skip if the disable file is present
 	if [ ! -f "/data/adb/susfs_no_auto_add_try_umount_for_bind_mount" ] && echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT"; then
 		sed -i 's/auto_try_umount=.*/auto_try_umount=0/' $PERSISTENT_DIR/config.sh
-		return
 	fi
 
 	# Temporarily disable hide sus mounts for all processes to read /proc/1/mountinfo
@@ -222,7 +229,7 @@ fi
 	if [ -z "$sus_mounts" ]; then
 		sus_mounts=$(grep -E "^[13][0-9]{5} .* (KSU|shared).*$" /proc/1/mountinfo | awk '{print $5}')
 	fi
-	# Loop through each susfs mount and add try_umount path
+	# Loop through each susfs mount and add_try_umount path (for KPM records)
 	for LINE in $sus_mounts; do
 
 		# remove legit mounts from the list if skip_legit_mounts is enabled
@@ -234,12 +241,6 @@ fi
 		if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
 			${SUSFS_BIN} add_try_umount "${LINE}" 1 && echo "[try_umount (SUSFS)]: susfs4ksu/boot-completed ${LINE}" >> $logfile1
 		elif [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
-			# NOTE: `apd kernel umount add` only exists on susfs-patched apd
-			# builds (susfs v2.0+).  Stock bmax121/APatch apd has no `kernel`
-			# subcommand — this call fails silently there.  This branch only
-			# runs when the KPM does NOT advertise TRY_UMOUNT; since this KPM
-			# DOES advertise it (hybrid userspace impl), this branch is skipped
-			# and the native add_try_umount path above runs instead.
 			${AP_BIN} kernel umount add "${LINE}" --flags 2 2>/dev/null && echo "[try_umount (KSUD)]: susfs4ksu/boot-completed ${LINE}" >> $logfile1
 		fi
 	done
@@ -249,7 +250,7 @@ fi
 		[ $hide_sus_mnts_for_all_or_non_su_procs -ge 1 ] && {
 			${SUSFS_BIN} hide_sus_mnts_for_all_procs 1 >/dev/null && echo "[hide_sus_mnts_for_all_procs = 1]: susfs4ksu/boot-completed" || {
 				${SUSFS_BIN} hide_sus_mnts_for_non_su_procs 1 >/dev/null && echo "[hide_sus_mnts_for_non_su_procs = 1]: susfs4ksu/boot-completed";
-			}; 
+			};
 		} >> $logfile1
 	fi
 }

@@ -54,9 +54,7 @@ int susfs_show_enabled_features(char *out, int outlen)
         "CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING\n"
         "CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS\n"
         "CONFIG_KSU_SUSFS_TRY_UMOUNT\n"
-        "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT\n"
-        "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT\n"
-        "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT\n";
+        "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT\n";
     int i = 0;
     while (features[i] && i < outlen - 1) { out[i] = features[i]; i++; }
     out[i] = '\0';
