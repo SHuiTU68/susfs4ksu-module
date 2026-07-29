@@ -65,7 +65,20 @@ jobs:
         run: |
           RANDOM_STRING=$(git rev-parse --short HEAD | cut -c1-7)
           echo "BUILD_ID=${RANDOM_STRING}" >> $GITHUB_ENV
-          sed -i "s/version=v.*/version=v1.5.2-KPM-CI-${RANDOM_STRING}/" module.prop
+          # Append CI build suffix to the existing version (e.g. v2.2.0-KPM-R30
+          # becomes v2.2.0-KPM-R30-CI-abc1234) instead of overwriting it.
+          # Previously this forced version back to v1.5.2-KPM-CI-xxx which
+          # broke ALL WebUI version gates:
+          #   v(E,1,5,3)=false -> status page hidden
+          #   v(E,1,5,5)=false -> auto_try_umount toggle hidden
+          #   v(E,1,5,7)=false -> hide_sus_mnts toggle hidden
+          #   v(E,1,5,8)=false -> umount_for_zygote toggle hidden
+          #   v(E,1,5,9)=false -> avc_log_spoofing toggle disabled
+          # causing every feature to show "Disabled" on the status page.
+          CURRENT_VERSION=$(grep '^version=' module.prop | cut -d'=' -f2-)
+          if ! echo "$CURRENT_VERSION" | grep -q "CI-${RANDOM_STRING}"; then
+            sed -i "s|^version=.*|version=${CURRENT_VERSION}-CI-${RANDOM_STRING}|" module.prop
+          fi
 
       - name: Assemble module zip
         run: |
