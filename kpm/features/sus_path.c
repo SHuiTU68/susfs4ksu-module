@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * sus_path - hide specified paths from umounted app processes.
+ * sus_path - hide specified paths from app processes (uid >= 10000).
  *
- * Hooks path_openat() (preferred, per upstream susfs refactor) with fallback
- * to do_filp_open() if path_openat is inlined on this kernel.
+ * Hooks three syscalls that file-existence detectors most commonly use:
+ *   __NR_openat     — open(), fopen(), File.openInput()
+ *   __NR_faccessat  — access(), File.exists()
+ *   __NR_newfstatat — stat(), File.stat(), File.length()
  *
- * Hiding logic: when an umounted app (uid >= 10000) tries to open a path
- * that is a prefix-match against any registered sus_path entry, return
- * -ENOENT from the hook so the syscall fails before VFS continues.
+ * Hiding logic: when an app process (uid >= 10000) calls any of these
+ * with a pathname that prefix-matches a registered sus_path entry, we
+ * short-circuit the syscall with -ENOENT so the file appears non-existent.
+ * Root and system processes (uid < 10000) are unaffected.
  *
- * TODO(per-kernel-tuning): struct nameidata layout (path field offset) needs
- * verification on the running kernel.  For now we hook at the entry and
- * re-resolve the path string from the dentry/path inside nameidata.
+ * This approach is kernel-version-independent — unlike hooking path_openat
+ * (which requires per-kernel struct nameidata offsets), the syscall args
+ * give us the pathname as a direct user pointer that we read via
+ * compat_strncpy_from_user.
  */
 #include <compiler.h>
 #include <kpmodule.h>
@@ -24,10 +28,29 @@
 #include <linux/spinlock.h>
 #include <uapi/asm-generic/errno.h>
 #include <kputils.h>
+#include <syscall.h>
 
 #include "../include/susfs_kpm.h"
 
 #define HIDE_PTR(p) __asm__("" : "=r"(p) : "0"(p))
+
+/* arm64 syscall numbers (asm-generic/unistd.h).
+ * We hook the three syscalls that file-existence detectors most commonly use:
+ *   openat      — open("/path", ...)           → File.open(), fopen()
+ *   faccessat   — access("/path", F_OK)        → File.exists()
+ *   newfstatat  — stat("/path", &buf)          → File.stat()
+ * When the pathname matches a registered sus_path AND the caller is an app
+ * process (uid >= 10000), we short-circuit the syscall with -ENOENT so the
+ * file appears non-existent.  Root and system processes are unaffected. */
+#ifndef __NR_openat
+#define __NR_openat      56
+#endif
+#ifndef __NR_faccessat
+#define __NR_faccessat   48
+#endif
+#ifndef __NR_newfstatat
+#define __NR_newfstatat  79
+#endif
 
 struct sus_path_entry {
     struct list_head list;
@@ -40,6 +63,12 @@ static DEFINE_SPINLOCK(sus_path_lock);
 
 static void *path_openat_addr;
 static void *do_filp_open_addr;
+
+/* Track which syscall hooks are installed so cleanup only unhooks what was
+ * successfully hooked.  Each is 1 after a successful hook_syscalln call. */
+static int openat_hooked = 0;
+static int faccessat_hooked = 0;
+static int newfstatat_hooked = 0;
 
 static int path_matches(const char *target, int target_len,
                         const char *entry, int entry_len)
@@ -64,17 +93,79 @@ static int caller_should_hide(void)
     return uid >= 10000;
 }
 
-/* hook callback — runs before path_openat().
- * arg0 = struct nameidata *, arg1 = const struct open_flags *, arg2 = unsigned.
- * We can't safely deref nameidata here without per-kernel offsets, so this
- * stub records the call; full hiding requires the offset table for 6.6. */
-static void before_path_openat(hook_fargs3_t *args, void *udata)
+/* Shared check: copy pathname from user space and compare against the
+ * sus_path list.  Returns 1 if the path should be hidden (-ENOENT returned
+ * to the caller).  MUST be called after caller_should_hide() already passed.
+ *
+ * This is the core hiding logic used by all three syscall hooks.  The fast
+ * path (empty list) returns immediately without touching user memory, so
+ * the overhead on non-sus_path boots is just one pointer comparison. */
+static int sus_path_should_hide(const char __user *user_path)
+{
+    if (!user_path) return 0;
+
+    /* Fast path: empty list → skip the expensive user-copy entirely. */
+    if (sus_path_list.next == &sus_path_list) return 0;
+
+    char path[SUSFS_MAX_LEN_PATHNAME];
+    int n = compat_strncpy_from_user(path, user_path, sizeof(path) - 1);
+    if (n <= 0) return 0;
+    path[n] = '\0';
+    int target_len = n;
+
+    susfs__raw_spin_lock(&sus_path_lock);
+    struct sus_path_entry *e;
+    list_for_each_entry(e, &sus_path_list, list) {
+        int entry_len = 0;
+        while (e->path[entry_len] && entry_len < SUSFS_MAX_LEN_PATHNAME)
+            entry_len++;
+        if (path_matches(path, target_len, e->path, entry_len)) {
+            susfs__raw_spin_unlock(&sus_path_lock);
+            return 1;
+        }
+    }
+    susfs__raw_spin_unlock(&sus_path_lock);
+    return 0;
+}
+
+/* ---- syscall hooks (before) ----
+ * Each reads arg1 (pathname) from user space; if it matches a sus_path
+ * entry and the caller is an app process, we set skip_origin=1 and
+ * ret=-ENOENT to make the file appear non-existent. */
+
+/* openat(int dfd, const char *pathname, int flags, mode_t mode) — 4 args */
+static void before_openat(hook_fargs4_t *args, void *udata)
 {
     if (!caller_should_hide()) return;
-    /* TODO: extract nd->path.dentry->d_name.name and compare against list.
-     * For 6.6, nameidata.path is at offset (verify per-build).  Until then,
-     * this hook is registered but inert — callers still see real paths. */
-    (void)args;
+    const char __user *user_path = (const char __user *)syscall_argn(args, 1);
+    if (sus_path_should_hide(user_path)) {
+        args->skip_origin = 1;
+        args->ret = (uint64_t)(long)-ENOENT;
+    }
+    (void)udata;
+}
+
+/* faccessat(int dfd, const char *pathname, int mode) — 3 args */
+static void before_faccessat(hook_fargs3_t *args, void *udata)
+{
+    if (!caller_should_hide()) return;
+    const char __user *user_path = (const char __user *)syscall_argn(args, 1);
+    if (sus_path_should_hide(user_path)) {
+        args->skip_origin = 1;
+        args->ret = (uint64_t)(long)-ENOENT;
+    }
+    (void)udata;
+}
+
+/* newfstatat(int dfd, const char *pathname, struct stat *buf, int flag) — 4 args */
+static void before_newfstatat(hook_fargs4_t *args, void *udata)
+{
+    if (!caller_should_hide()) return;
+    const char __user *user_path = (const char __user *)syscall_argn(args, 1);
+    if (sus_path_should_hide(user_path)) {
+        args->skip_origin = 1;
+        args->ret = (uint64_t)(long)-ENOENT;
+    }
     (void)udata;
 }
 
@@ -103,51 +194,77 @@ int susfs_add_sus_path(const char *path, int is_loop)
 
 int susfs_sus_path_init_hooks(void)
 {
+    int rc = 0;
+
+    /* The path_openat / do_filp_open hook (hook_wrap) is kept for future
+     * use but is inert — the actual hiding is done by the syscall hooks
+     * below, which are kernel-version-independent and give us direct access
+     * to the user-space pathname argument.  We no longer need per-kernel
+     * nameidata offsets. */
     path_openat_addr = (void *)kallsyms_lookup_name("path_openat");
+    if (!path_openat_addr)
+        path_openat_addr = (void *)kallsyms_lookup_name("do_filp_open");
     if (path_openat_addr) {
-        hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
-        HIDE_PTR(wrap);
-        hook_err_t err = wrap(path_openat_addr, 2,
-                              (void *)before_path_openat, 0, 0);
-        if (err != HOOK_NO_ERR) {
-            logke("susfs_kpm: hook path_openat failed: %d\n", err);
-            return (int)err;
-        }
-        logki("susfs_kpm: hooked path_openat @ %px\n", path_openat_addr);
-        return 0;
+        logki("susfs_kpm: path_openat found @ %px (inert, syscalls do the work)\n",
+              path_openat_addr);
     }
-    /* fallback: do_filp_open is the public entrypoint that calls path_openat */
-    do_filp_open_addr = (void *)kallsyms_lookup_name("do_filp_open");
-    if (do_filp_open_addr) {
-        hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
-        HIDE_PTR(wrap);
-        hook_err_t err = wrap(do_filp_open_addr, 2,
-                              (void *)before_path_openat, 0, 0);
-        if (err != HOOK_NO_ERR) {
-            logke("susfs_kpm: hook do_filp_open failed: %d\n", err);
-            return (int)err;
-        }
-        logki("susfs_kpm: hooked do_filp_open @ %px\n", do_filp_open_addr);
-        return 0;
+
+    /* Hook openat — catches open(), fopen(), File.openInput(), etc. */
+    hook_err_t err = hook_syscalln(__NR_openat, 4, before_openat, 0, 0);
+    if (err != HOOK_NO_ERR) {
+        logke("susfs_kpm: hook openat failed: %d\n", err);
+        rc = (int)err;
+    } else {
+        openat_hooked = 1;
+        logki("susfs_kpm: hooked openat syscall (before)\n");
     }
-    logke("susfs_kpm: neither path_openat nor do_filp_open found\n");
-    return -ENOSYS;
+
+    /* Hook faccessat — catches access(), File.exists() */
+    err = hook_syscalln(__NR_faccessat, 3, before_faccessat, 0, 0);
+    if (err != HOOK_NO_ERR) {
+        logke("susfs_kpm: hook faccessat failed: %d\n", err);
+        rc = (int)err;
+    } else {
+        faccessat_hooked = 1;
+        logki("susfs_kpm: hooked faccessat syscall (before)\n");
+    }
+
+    /* Hook newfstatat — catches stat(), File.stat(), File.length() */
+    err = hook_syscalln(__NR_newfstatat, 4, before_newfstatat, 0, 0);
+    if (err != HOOK_NO_ERR) {
+        logke("susfs_kpm: hook newfstatat failed: %d\n", err);
+        rc = (int)err;
+    } else {
+        newfstatat_hooked = 1;
+        logki("susfs_kpm: hooked newfstatat syscall (before)\n");
+    }
+
+    /* Emit to dmesg so userspace can verify the hooks are active. */
+    if (susfs_printk) {
+        susfs_printk("susfs_kpm: sus_path syscalls hooked "
+                     "(openat=%d faccessat=%d newfstatat=%d)\n",
+                     openat_hooked, faccessat_hooked, newfstatat_hooked);
+    }
+
+    return rc;
 }
 
 void susfs_sus_path_cleanup(void)
 {
-    if (path_openat_addr) {
-        void (*un)(void *, void *, void *, int) = hook_unwrap_remove;
-        HIDE_PTR(un);
-        un(path_openat_addr, (void *)before_path_openat, 0, 1);
-        path_openat_addr = 0;
+    if (openat_hooked) {
+        unhook_syscalln(__NR_openat, before_openat, 0);
+        openat_hooked = 0;
     }
-    if (do_filp_open_addr) {
-        void (*un)(void *, void *, void *, int) = hook_unwrap_remove;
-        HIDE_PTR(un);
-        un(do_filp_open_addr, (void *)before_path_openat, 0, 1);
-        do_filp_open_addr = 0;
+    if (faccessat_hooked) {
+        unhook_syscalln(__NR_faccessat, before_faccessat, 0);
+        faccessat_hooked = 0;
     }
+    if (newfstatat_hooked) {
+        unhook_syscalln(__NR_newfstatat, before_newfstatat, 0);
+        newfstatat_hooked = 0;
+    }
+    path_openat_addr = 0;
+    do_filp_open_addr = 0;
 
     susfs__raw_spin_lock(&sus_path_lock);
     struct sus_path_entry *e, *tmp;
