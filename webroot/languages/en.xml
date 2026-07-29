@@ -12,7 +12,6 @@
   <string id="enabled_label">Enabled</string>
   <string id="disabled_label">Disabled</string>
   <string id="deprecated_label">Deprecated</string>
-  <string id="partial_label">Partial</string>
   <string id="unknown_label">Unknown</string>
   <string id="help_label">Help</string>
   <string id="send_logs_label">Send Logs</string>
@@ -51,7 +50,6 @@
   <string id="spoof_cmdline_feature_label">Spoof Cmdline/Bootconfig</string>
   <string id="open_redirect_feature_label">Open Redirect Support</string>
   <string id="enable_log_feature_label">Logging Support</string>
-  <string id="selinux_hook_feature_label">SELinux Rule Hiding</string>
   <string id="auto_default_mount_feature_label">Auto Default Mount</string>
   <string id="auto_bind_mount_feature_label">Auto Bind Mount</string>
   <string id="auto_try_umount_bind_feature_label">Auto Try Umount Bind</string>

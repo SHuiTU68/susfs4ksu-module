@@ -83,8 +83,6 @@ extern int (*susfs_printk)(const char *fmt, ...);
 #define CMD_SUSFS_SHOW_VARIANT              0x555e3
 #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING   0x60010
 #define CMD_SUSFS_ADD_SUS_MAP               0x60020
-#define CMD_SUSFS_SHOW_SELINUX_MODE         0x60030
-#define CMD_SUSFS_SET_SELINUX_HOOK          0x60031
 
 #define SUSFS_MAX_LEN_PATHNAME              256
 #define SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE 8192
@@ -184,13 +182,5 @@ void susfs_avc_log_spoofing_cleanup(void);
 int susfs_show_version(char *out, int outlen);
 int susfs_show_enabled_features(char *out, int outlen);
 int susfs_show_variant(char *out, int outlen);
-
-/* features/selinux_hook.c — 6.6-only port of Admirepowered/741afb7
- * selinux_hook KPM.  Hides Magisk-injected SELinux rules from apps by
- * snapshotting the clean policy and redirecting AV queries to it. */
-int susfs_selinux_hook_init(void);
-void susfs_selinux_hook_exit(void);
-int susfs_selinux_hook_get_mode(char *out, int outlen);
-int susfs_selinux_hook_is_active(void);
 
 #endif /* SUSFS_KPM_H */

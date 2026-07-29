@@ -97,11 +97,6 @@ if [ -n "$version" ] || [ -n "$susfs_features" ]; then
 		echo "version: $version"
 		echo "variant: $susfs_variant"
 		echo "features: $susfs_features"
-		# selinux_hook mode — the KPM prints "susfs_kpm: selinux_hook=<mode>"
-		# at init.  Capture it here so the CLI `show selinux_mode` fallback
-		# can read it after dmesg ring buffer rotation.
-		selinux_hook_mode=$(grep 'susfs_kpm: selinux_hook=' "$dmesg_cache" | tail -1 | sed 's/.*selinux_hook=//;s/ .*//')
-		[ -n "$selinux_hook_mode" ] && echo "selinux_hook: $selinux_hook_mode"
 	} > "$diag_file" 2>&1
 elif [ $kpm_in_dmesg -eq 1 ]; then
 	# KPM is loaded (dmesg) but `ksu_susfs show` couldn't parse it.
@@ -147,10 +142,6 @@ try_umount_zygote=0
 [ -f $PERSISTENT_DIR/config.sh ] && . $PERSISTENT_DIR/config.sh
 
 echo "susfs4ksu/post-fs-data: [logging_initialized]" > $logfile1
-
-# Log selinux_hook status (auto-initialized in kernel, no userspace toggle needed)
-selinux_hook_mode=$(${SUSFS_BIN} show selinux_mode 2>/dev/null | head -1)
-[ -n "$selinux_hook_mode" ] && echo "[selinux_hook]: $selinux_hook_mode" >> $logfile1
 
 [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && [ -f /data/adb/ap/susfs4ksu/using_old_sus_path_layout ] && {
 	echo "susfs4ksu/post-fs-data: Detected old sus path layout, removing the cache file for rechecking old and new sus_path layout" >> $logfile1

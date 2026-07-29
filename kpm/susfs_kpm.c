@@ -317,12 +317,6 @@ static long susfs_init(const char *args, const char *event, void *reserved)
     rc |= susfs_set_uname_init_hooks();
     rc |= susfs_set_cmdline_init_hooks();
     rc |= susfs_avc_log_spoofing_init_hooks();
-    /* selinux_hook: 6.6-only Magisk SELinux rule hiding.  Heavy init
-     * (symbol cache scan + clean policy snapshot); errors are logged
-     * internally and the module degrades to FULL_FALLBACK.  We don't
-     * OR the return into rc — selinux_hook failure must NOT block the
-     * rest of susfs. */
-    (void)susfs_selinux_hook_init();
 
     if (rc) {
         logke("susfs_kpm: one or more hook installations failed (rc=%d), "
@@ -360,16 +354,6 @@ static long susfs_init(const char *args, const char *event, void *reserved)
                      "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT,"
                      "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT");
         susfs_printk("susfs_kpm: loaded\n");
-        /* Report selinux_hook status so the WebUI can show it. */
-        {
-            char smode[32] = {0};
-            int ml = susfs_selinux_hook_get_mode(smode, sizeof(smode));
-            if (ml > 0) {
-                susfs_printk("susfs_kpm: selinux_hook=%s\n", smode);
-            } else {
-                susfs_printk("susfs_kpm: selinux_hook=inactive\n");
-            }
-        }
     }
 
     /* Install the syscall command channel (hook __NR_kcmp).
@@ -406,7 +390,6 @@ static long susfs_exit(void *reserved)
     susfs_set_uname_cleanup();
     susfs_set_cmdline_cleanup();
     susfs_avc_log_spoofing_cleanup();
-    susfs_selinux_hook_exit();
     return 0;
 }
 
@@ -546,23 +529,6 @@ static long susfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
             compat_copy_to_user(out_msg, tmp, len + 1);
         }
         return rc2;
-    }
-    case CMD_SUSFS_SHOW_SELINUX_MODE: {
-        /* Returns the selinux_hook working mode string:
-         * "NORMAL-K", "PARTIAL_FALLBACK", or "FULL_FALLBACK".
-         * The CLI / WebUI uses this to display status. */
-        char smode[32] = {0};
-        int ml = susfs_selinux_hook_get_mode(smode, sizeof(smode));
-        if (ml > 0 && out_msg && outlen > 0) {
-            compat_copy_to_user(out_msg, smode, ml + 1);
-        }
-        return (ml > 0) ? 0 : ml;
-    }
-    case CMD_SUSFS_SET_SELINUX_HOOK: {
-        /* Reserved for future on/off toggle.  Currently selinux_hook
-         * initialises automatically at KPM load; the arg is accepted
-         * but has no effect.  Returns current active state. */
-        return susfs_selinux_hook_is_active();
     }
     default:
         logke("susfs_kpm: unknown cmd 0x%x\n", cmd);
