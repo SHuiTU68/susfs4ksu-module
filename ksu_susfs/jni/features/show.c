@@ -68,17 +68,28 @@ static void print_help(void){
 	show_print_help();
 }
 
-/* Try the syscall command channel.  Returns 0 on success, -1 on failure. */
+/* Try the syscall command channel.  Returns 0 on success, -1 on failure.
+ *
+ * CAUTION: The KPM hook on __NR_kcmp may return 0 (indicating it handled
+ * the call) but leave the output buffer empty if the hook is installed
+ * but doesn't recognize the command, or if the magic doesn't match but
+ * the hook still intercepts.  We MUST check that out is non-empty after
+ * the call — otherwise we'd return a false success with an empty string,
+ * which short-circuits all fallback layers and causes the WebUI to see
+ * an empty features list (all features show "Disabled"). */
 static int syscall_show(unsigned int cmd, char *out, size_t outlen)
 {
 	char cmd_str[32];
 	snprintf(cmd_str, sizeof(cmd_str), "%X", cmd);
+	/* Ensure out is zeroed so we can detect "hook returned 0 but wrote nothing" */
+	out[0] = '\0';
 	long rc = syscall(__NR_kcmp_channel, SUSFS_CMD_MAGIC,
 	                  cmd_str, out, (long)outlen);
-	if (rc == 0) {
+	if (rc == 0 && out[0] != '\0') {
 		out[strcspn(out, "\r\n")] = '\0';
 		return 0;
 	}
+	/* rc == 0 but out empty → false success, fall through to fallbacks */
 	return -1;
 }
 
