@@ -197,15 +197,37 @@ fi
 # (1) sus_mount — record paths in KPM (for /proc/mounts hook) and also
 #     umount them if hide_sus_mnts_for_all_or_non_su_procs is enabled.
 if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
+    # (a) Explicit paths from sus_mount.txt
     if grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" > /dev/null 2>&1; then
         grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" | while read -r i; do
             [ -z "$i" ] && continue
             ${SUSFS_BIN} add_sus_mount "$i" 2>/dev/null && echo "[sus_mount]: susfs4ksu/post-fs-data $i" >> "$logfile1"
-            # If hide_sus_mnts_for_all_or_non_su_procs is on, actually detach
-            # the mount so it disappears from /proc/mounts for ALL processes.
             if [ "$hide_sus_mnts_for_all_or_non_su_procs" -ge 1 ] 2>/dev/null; then
                 umount -l "$i" 2>/dev/null && echo "[sus_mount]: umount $i" >> "$logfile1"
             fi
+        done
+    fi
+    # (b) Auto-detect: when hide_sus_mnts is enabled, scan /proc/1/mountinfo
+    #     for ALL mounts that reference /data/adb paths (in source, root, or
+    #     super_options) and register their mountpoints with the KPM so they
+    #     get hidden from /proc/mounts for non-su processes.
+    #     This runs ALWAYS when hide_sus_mnts is on — no auto_* toggle needed.
+    #     The original susfs did this via kernel hooks (AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+    #     / AUTO_ADD_SUS_BIND_MOUNT); we do it in userspace by scanning mountinfo.
+    if [ "$hide_sus_mnts_for_all_or_non_su_procs" -ge 1 ] 2>/dev/null; then
+        echo "[sus_mount]: auto-scanning /proc/1/mountinfo for /data/adb mounts" >> "$logfile1"
+        # /proc/1/mountinfo format: ID PARENT DEV ROOT MOUNT_POINT OPTIONS ... TYPE SOURCE SUPER_OPTS
+        # $5 = mount point.  Grep full line for /data/adb paths.
+        grep -E '/data/adb/(modules|ap|ksu)' /proc/1/mountinfo 2>/dev/null | \
+            awk '{print $5}' | sort -u | while read -r mp; do
+            [ -z "$mp" ] && continue
+            ${SUSFS_BIN} add_sus_mount "$mp" 2>/dev/null && echo "[sus_mount]: auto $mp" >> "$logfile1"
+        done
+        # Also register /debug_ramdisk and /sbin if they are mountpoints
+        for auto_mp in /debug_ramdisk /sbin; do
+            grep -q " ${auto_mp} " /proc/1/mountinfo 2>/dev/null && {
+                ${SUSFS_BIN} add_sus_mount "$auto_mp" 2>/dev/null && echo "[sus_mount]: auto $auto_mp" >> "$logfile1"
+            }
         done
     fi
 fi
@@ -220,32 +242,34 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
             umount -l "$i" 2>/dev/null && echo "[try_umount]: umount $i" >> "$logfile1"
         done
     fi
-    # (b) Auto-scan for suspicious bind mounts and umount them.
-    #     Triggered by ANY of: auto_try_umount, auto_mount, auto_bind,
-    #     auto_umount_bind — they all control the same userspace scan in
-    #     this KPM (original susfs had separate kernel hooks for each;
-    #     we use one unified /proc/mounts scan).
-    #     Skip if the disable sentinel file is present.
+    # (b) Auto-umount: when any auto_* toggle is on, scan /proc/1/mountinfo
+    #     for non-critical mounts referencing /data/adb and actually umount
+    #     them.  Unlike sus_mount (which only hides from /proc/mounts), this
+    #     DETACHES the mount from the init namespace so apps never see it.
+    #     Only safe for non-critical mountpoints — /system, /vendor etc. are
+    #     excluded because umounting them breaks the system.
     if [ ! -f /data/adb/susfs_no_auto_add_try_umount_for_bind_mount ]; then
         if [ "$auto_try_umount" = "1" ] || [ "$auto_mount" = "1" ] || \
            [ "$auto_bind" = "1" ] || [ "$auto_umount_bind" = "1" ]; then
-            echo "[auto_try_umount]: scanning /proc/mounts for suspicious bind mounts (auto_try_umount=$auto_try_umount auto_mount=$auto_mount auto_bind=$auto_bind auto_umount_bind=$auto_umount_bind)" >> "$logfile1"
+            echo "[try_umount]: auto-scanning /proc/1/mountinfo for umount targets (auto_try_umount=$auto_try_umount auto_mount=$auto_mount auto_bind=$auto_bind auto_umount_bind=$auto_umount_bind)" >> "$logfile1"
             ${SUSFS_BIN} auto_add_try_umount_for_bind_mount 2>/dev/null
-            for suspect in \
-                /data/adb/modules \
-                /data/adb/ap \
-                /data/adb/ksu \
-                /debug_ramdisk \
-                /sbin
-            do
-                awk -v s="$suspect" '$1 ~ s {print $2}' /proc/mounts 2>/dev/null | while read -r mp; do
-                    [ -z "$mp" ] && continue
-                    case "$mp" in
-                        /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*) continue ;;
-                    esac
-                    ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null && echo "[try_umount]: susfs4ksu/post-fs-data auto $mp" >> "$logfile1"
-                    umount -l "$mp" 2>/dev/null && echo "[try_umount]: umount $mp" >> "$logfile1"
-                done
+            # Grep full mountinfo line for /data/adb paths, extract mountpoint ($5)
+            grep -E '/data/adb/(modules|ap|ksu)' /proc/1/mountinfo 2>/dev/null | \
+                awk '{print $5}' | sort -u | while read -r mp; do
+                [ -z "$mp" ] && continue
+                # Skip critical system mountpoints — umounting them = bootloop
+                case "$mp" in
+                    /|/proc|/sys|/dev|/data|/system|/vendor|/apex|/mnt/*|/system/*|/vendor/*|/apex/*) continue ;;
+                esac
+                ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null && echo "[try_umount]: auto $mp" >> "$logfile1"
+                umount -l "$mp" 2>/dev/null && echo "[try_umount]: umount $mp" >> "$logfile1"
+            done
+            # Also try /debug_ramdisk and /sbin
+            for auto_mp in /debug_ramdisk /sbin; do
+                grep -q " ${auto_mp} " /proc/1/mountinfo 2>/dev/null && {
+                    ${SUSFS_BIN} add_try_umount "$auto_mp" 1 2>/dev/null && echo "[try_umount]: auto $auto_mp" >> "$logfile1"
+                    umount -l "$auto_mp" 2>/dev/null && echo "[try_umount]: umount $auto_mp" >> "$logfile1"
+                }
             done
         fi
     fi
