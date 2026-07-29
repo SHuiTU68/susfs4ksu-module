@@ -10,7 +10,7 @@ version=$(${SUSFS_BIN} show version)
 susfs_features=$(${SUSFS_BIN} show enabled_features)
 # SUSFS_DECIMAL_MAIN = '2'
 SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
-# SUSFS_DECIMAL_SUB = '0'
+# SUSFS_DECIMAL_SUB = '2'
 SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
 # SUSFS_DECIMAL_PATCH = '0'
 SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
@@ -213,7 +213,7 @@ fi
 			cil_name=`basename "$sepolicy_cil"`
 			grep -v "lineage" $sepolicy_cil > $mntfolder/$cil_name
 			[ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ${SUSFS_BIN} add_sus_kstat $sepolicy_cil && echo "[update_sus_kstat]: susfs4ksu/service $sepolicy_cil" >> $logfile1
-			[ "$SUSFS_DECIMAL_MAIN" = 2 ] && [ "$SUSFS_DECIMAL_SUB" = 0 ] || [ "$SUSFS_DECIMAL_MAIN" -lt 2 ] && susfs_clone_perm $mntfolder/$cil_name $sepolicy_cil
+			[ "$SUSFS_DECIMAL_MAIN" -lt 2 ] && susfs_clone_perm $mntfolder/$cil_name $sepolicy_cil
 			mount --bind $mntfolder/$cil_name $sepolicy_cil && echo "[bind_mount]: susfs4ksu/service $sepolicy_cil" >> $logfile1
 			[ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ${SUSFS_BIN} update_sus_kstat $sepolicy_cil && echo "[update_sus_kstat]: susfs4ksu/service $sepolicy_cil" >> $logfile1
 			${SUSFS_BIN} add_sus_mount $sepolicy_cil && echo "[sus_mount]: susfs4ksu/service $sepolicy_cil" >> $logfile1
@@ -228,7 +228,7 @@ fi
 	grep -q lineage $compatibility_matrix && {
 		grep -v "lineage" $compatibility_matrix > $mntfolder/compatibility_matrix.device.xml
 		[ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ${SUSFS_BIN} add_sus_kstat $compatibility_matrix && echo "[update_sus_kstat]: susfs4ksu/service $compatibility_matrix" >> $logfile1
-		[ "$SUSFS_DECIMAL_MAIN" = 2 ] && [ "$SUSFS_DECIMAL_SUB" = 0 ] || [ "$SUSFS_DECIMAL_MAIN" -lt 2 ] && susfs_clone_perm $mntfolder/compatibility_matrix.device.xml $compatibility_matrix
+		[ "$SUSFS_DECIMAL_MAIN" -lt 2 ] && susfs_clone_perm $mntfolder/compatibility_matrix.device.xml $compatibility_matrix
 		mount --bind $mntfolder/compatibility_matrix.device.xml $compatibility_matrix && echo "[bind_mount]: susfs4ksu/service $compatibility_matrix" >> $logfile1
 		[ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ${SUSFS_BIN} update_sus_kstat $compatibility_matrix && echo "[update_sus_kstat]: susfs4ksu/service $compatibility_matrix" >> $logfile1
 		${SUSFS_BIN} add_sus_mount $compatibility_matrix && echo "[sus_mount]: susfs4ksu/service $compatibility_matrix" >> $logfile1

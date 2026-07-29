@@ -31,7 +31,7 @@ fi
 
 # SUSFS_DECIMAL_MAIN = '2'
 SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
-# SUSFS_DECIMAL_SUB = '0'
+# SUSFS_DECIMAL_SUB = '2'
 SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
 # SUSFS_DECIMAL_PATCH = '0'
 SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
