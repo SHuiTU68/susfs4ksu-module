@@ -445,6 +445,12 @@ static long susfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
     case CMD_SUSFS_ADD_TRY_UMOUNT:
         if (argc < 2) return -EINVAL;
         return susfs_add_try_umount(ARG(1), (int)parse_long(ARG(2), 0));
+    case CMD_SUSFS_ADD_SUS_MOUNT:
+        /* add_sus_mount: record path for /proc/mounts hiding (mode=0,
+         * no umount).  Uses the same try_umount list as add_try_umount
+         * but with mode=0 so the path is only hidden, not detached. */
+        if (argc < 2) return -EINVAL;
+        return susfs_add_try_umount(ARG(1), 0);
     case CMD_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT:
         return susfs_auto_add_try_umount_for_bind_mount();
     case CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY:

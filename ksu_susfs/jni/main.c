@@ -46,10 +46,16 @@ int main(int argc, char *argv[]) {
 		return add_sus_path_loop(argc, argv);
 	if (!strcmp(argv[1], "hide_sus_mnts_for_non_su_procs"))
 		return hide_sus_mnts_for_non_su_procs(argc, argv);
+	if (!strcmp(argv[1], "hide_sus_mnts_for_all_procs"))
+		return hide_sus_mnts_for_all_procs(argc, argv);
+	if (!strcmp(argv[1], "add_sus_mount"))
+		return add_sus_mount(argc, argv);
 	if (!strcmp(argv[1], "add_try_umount"))
 		return add_try_umount(argc, argv);
 	if (!strcmp(argv[1], "auto_add_try_umount_for_bind_mount"))
 		return auto_add_try_umount_for_bind_mount(argc, argv);
+	if (!strcmp(argv[1], "umount_for_zygote_iso_service"))
+		return umount_for_zygote_iso_service(argc, argv);
 	if (!strcmp(argv[1], "add_sus_map"))
 		return add_sus_map(argc, argv);
 	if (!strcmp(argv[1], "add_open_redirect"))
@@ -66,12 +72,22 @@ int main(int argc, char *argv[]) {
 		return enable_log(argc, argv);
 	if (!strcmp(argv[1], "set_cmdline_or_bootconfig"))
 		return set_cmdline_or_bootconfig(argc, argv);
+	if (!strcmp(argv[1], "set_proc_cmdline"))
+		return set_proc_cmdline(argc, argv);
 	if (!strcmp(argv[1], "enable_avc_log_spoofing"))
 		return enable_avc_log_spoofing(argc, argv);
 	if (!strcmp(argv[1], "show"))
 		return show(argc, argv);
 	if (!strcmp(argv[1], "set_uname"))
 		return set_uname(argc, argv);
+	if (!strcmp(argv[1], "set_sdcard_root_path"))
+		return set_sdcard_root_path(argc, argv);
+	if (!strcmp(argv[1], "set_android_data_root_path"))
+		return set_android_data_root_path(argc, argv);
+	/* sus_su is not supported by this KPM — return -1 so scripts
+	 * detect the failure and set sus_su=-1 in config.sh. */
+	if (!strcmp(argv[1], "sus_su"))
+		return -1;
 	print_help();
 	return -EINVAL;
 }

@@ -76,3 +76,19 @@ int add_sus_path_loop(int argc, char *argv[]) {
 	}
 	return rc;
 }
+
+/* set_sdcard_root_path — no-op in this KPM.
+ * In upstream susfs this sets the sdcard root path for sus_path scanning.
+ * This KPM hooks path_openat directly and doesn't need root path config.
+ * Returns 0 so boot-completed.sh doesn't fail. */
+int set_sdcard_root_path(int argc, char *argv[]) {
+	(void)argc; (void)argv;
+	return 0;
+}
+
+/* set_android_data_root_path — no-op in this KPM.
+ * Same rationale as set_sdcard_root_path. */
+int set_android_data_root_path(int argc, char *argv[]) {
+	(void)argc; (void)argv;
+	return 0;
+}

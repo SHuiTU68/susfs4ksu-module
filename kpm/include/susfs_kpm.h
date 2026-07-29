@@ -70,6 +70,7 @@ extern int (*susfs_printk)(const char *fmt, ...);
 #define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU  0x55561
 #define CMD_SUSFS_ADD_TRY_UMOUNT            0x55562
 #define CMD_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT 0x55563
+#define CMD_SUSFS_ADD_SUS_MOUNT             0x55564
 #define CMD_SUSFS_ADD_SUS_KSTAT             0x55570
 #define CMD_SUSFS_UPDATE_SUS_KSTAT          0x55571
 #define CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY  0x55572

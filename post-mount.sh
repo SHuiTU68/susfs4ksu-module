@@ -28,6 +28,26 @@ force_hide_lsposed=0
 # supported via a hybrid approach (KPM records the list, this script does
 # the actual `umount -l` in the init mount namespace).
 susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null)
+# Fallback: if show enabled_features fails (KPM not loaded, syscall channel
+# not working, dmesg rotated, etc.), default to the builtin feature list.
+# This ensures the try_umount and sus_mount blocks below still run, because
+# this KPM always supports these features (hybrid userspace implementation).
+if [ -z "$susfs_features" ] || ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
+    susfs_features="CONFIG_KSU_SUSFS_SUS_PATH
+CONFIG_KSU_SUSFS_SUS_MOUNT
+CONFIG_KSU_SUSFS_SUS_KSTAT
+CONFIG_KSU_SUSFS_OPEN_REDIRECT
+CONFIG_KSU_SUSFS_SUS_MAP
+CONFIG_KSU_SUSFS_SPOOF_UNAME
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+CONFIG_KSU_SUSFS_ENABLE_LOG
+CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
+CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
+CONFIG_KSU_SUSFS_TRY_UMOUNT
+CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT"
+fi
 
 # to add mounts
 # echo "/system" >> /data/adb/susfs4ksu/sus_mount.txt

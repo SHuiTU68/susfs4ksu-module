@@ -86,7 +86,14 @@ static int syscall_show(unsigned int cmd, char *out, size_t outlen)
 	long rc = syscall(__NR_kcmp_channel, SUSFS_CMD_MAGIC,
 	                  cmd_str, out, (long)outlen);
 	if (rc == 0 && out[0] != '\0') {
-		out[strcspn(out, "\r\n")] = '\0';
+		/* Strip only TRAILING newlines — the enabled_features output is
+		 * multi-line (newline-separated CONFIG list).  The previous code
+		 * used strcspn(out, "\r\n") which truncated at the FIRST newline,
+		 * destroying all features after the first one and causing the
+		 * WebUI to show them as "Disabled". */
+		size_t len = strlen(out);
+		while (len > 0 && (out[len-1] == '\n' || out[len-1] == '\r'))
+			out[--len] = '\0';
 		return 0;
 	}
 	/* rc == 0 but out empty → false success, fall through to fallbacks */

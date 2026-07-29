@@ -84,3 +84,10 @@ int set_cmdline_or_bootconfig(int argc, char *argv[]) {
 	return rc;
 	(void)err;
 }
+
+/* set_proc_cmdline — alias for set_cmdline_or_bootconfig.
+ * Legacy scripts use set_proc_cmdline on older susfs versions; this KPM
+ * always uses the unified set_cmdline_or_bootconfig path. */
+int set_proc_cmdline(int argc, char *argv[]) {
+	return set_cmdline_or_bootconfig(argc, argv);
+}

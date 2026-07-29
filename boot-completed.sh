@@ -11,6 +11,28 @@ logfile1="$tmpfolder/logs/susfs1.log"
 # safe; no timeout needed.
 version=$(${SUSFS_BIN} show version 2>/dev/null)
 susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null)
+# Fallback: if show enabled_features fails, default to the builtin feature
+# list so feature-gated blocks below still run.
+if [ -z "$susfs_features" ] || ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
+	susfs_features="CONFIG_KSU_SUSFS_SUS_PATH
+CONFIG_KSU_SUSFS_SUS_MOUNT
+CONFIG_KSU_SUSFS_SUS_KSTAT
+CONFIG_KSU_SUSFS_OPEN_REDIRECT
+CONFIG_KSU_SUSFS_SUS_MAP
+CONFIG_KSU_SUSFS_SPOOF_UNAME
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+CONFIG_KSU_SUSFS_ENABLE_LOG
+CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
+CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
+CONFIG_KSU_SUSFS_TRY_UMOUNT
+CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT"
+fi
+# Fallback version if show version fails
+if [ -z "$version" ]; then
+	version="v2.2.0"
+fi
 # SUSFS_DECIMAL_MAIN = '2'
 SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
 # SUSFS_DECIMAL_SUB = '2'
