@@ -23,15 +23,19 @@ auto_try_umount=0
 force_hide_lsposed=0
 [ -f $PERSISTENT_DIR/config.sh ] && . $PERSISTENT_DIR/config.sh
 
-# Feature list from the KPM — needed to guard calls to features this KPM
-# does NOT implement (sus_su).  try_umount / auto_add_try_umount ARE now
-# supported via a hybrid approach (KPM records the list, this script does
-# the actual `umount -l` in the init mount namespace).
-susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null)
+# Reuse the dmesg cache from post-fs-data.sh instead of calling
+# `ksu_susfs show enabled_features` (forks a process + parses dmesg).
+dmesg_cache="$tmpfolder/logs/dmesg_cache.txt"
+if [ ! -f "$dmesg_cache" ]; then
+	dmesg 2>/dev/null > "$dmesg_cache"
+fi
+susfs_features=""
+if [ -f "$dmesg_cache" ]; then
+	_fline=$(grep 'susfs_kpm: features=' "$dmesg_cache" | tail -1)
+	[ -n "$_fline" ] && susfs_features=$(echo "$_fline" | sed 's/.*features=//' | tr ',' '\n')
+fi
 # Fallback: if show enabled_features fails (KPM not loaded, syscall channel
 # not working, dmesg rotated, etc.), default to the builtin feature list.
-# This ensures the try_umount and sus_mount blocks below still run, because
-# this KPM always supports these features (hybrid userspace implementation).
 if [ -z "$susfs_features" ] || ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
     susfs_features="CONFIG_KSU_SUSFS_SUS_PATH
 CONFIG_KSU_SUSFS_SUS_MOUNT
@@ -70,9 +74,8 @@ if [ "$force_hide_lsposed" = "1" ] && echo "$susfs_features" | grep -q "CONFIG_K
     done
 fi
 
-# SUSFS Logging
-dmesg_snapshot=$(dmesg)
-echo "$dmesg_snapshot" | sed -n "/^\[ *$post_fs_data/,\$p" | grep -iE "susfs_auto_add|ksu_susfs|susfs:|susfs_kpm:" >> $logfile
-endmsg=$(echo "$dmesg_snapshot" | grep -E '^\[ *[0-9]' | cut -d']' -f1 | sed 's/^\[ *//' | cut -d' ' -f1 | tail -n 1)
+# SUSFS Logging — reuse the dmesg cache (refreshed above if missing).
+grep -iE "susfs_auto_add|ksu_susfs|susfs:|susfs_kpm:" "$dmesg_cache" >> $logfile
+endmsg=$(grep -E '^\[ *[0-9]' "$dmesg_cache" | tail -n 1 | sed 's/^\[ *//; s/\].*//')
 echo "post_mount=$endmsg" >> $tmpfolder/logs/boot_stage_time.sh
 # EOF

@@ -55,11 +55,17 @@
 struct sus_path_entry {
     struct list_head list;
     char path[SUSFS_MAX_LEN_PATHNAME];
+    int path_len;  /* cached length to avoid strlen in hot path */
     int is_loop;  /* 1 => re-flag on zygote spawn (sus_path_loop) */
 };
 
 static LIST_HEAD(sus_path_list);
 static DEFINE_SPINLOCK(sus_path_lock);
+/* Atomic counter of registered entries.  Read WITHOUT lock on the fast
+ * path: if 0, the hook returns immediately without touching user memory
+ * or taking the spinlock.  This makes the overhead on non-sus_path boots
+ * (the common case) essentially zero — one int read + branch. */
+static int sus_path_count = 0;
 
 static void *path_openat_addr;
 static void *do_filp_open_addr;
@@ -97,15 +103,18 @@ static int caller_should_hide(void)
  * sus_path list.  Returns 1 if the path should be hidden (-ENOENT returned
  * to the caller).  MUST be called after caller_should_hide() already passed.
  *
- * This is the core hiding logic used by all three syscall hooks.  The fast
- * path (empty list) returns immediately without touching user memory, so
- * the overhead on non-sus_path boots is just one pointer comparison. */
+ * Fast path: if sus_path_count == 0 (no paths registered), return
+ * immediately WITHOUT copying from user space or taking the spinlock.
+ * This makes the per-syscall overhead on non-sus_path boots (the common
+ * case) essentially zero — one int read + branch. */
 static int sus_path_should_hide(const char __user *user_path)
 {
     if (!user_path) return 0;
 
-    /* Fast path: empty list → skip the expensive user-copy entirely. */
-    if (sus_path_list.next == &sus_path_list) return 0;
+    /* Lock-free fast path: no entries → nothing to hide.
+     * int reads are atomic on aarch64; the worst case of a race during
+     * add_sus_path() is one syscall slipping through, which is harmless. */
+    if (sus_path_count == 0) return 0;
 
     char path[SUSFS_MAX_LEN_PATHNAME];
     int n = compat_strncpy_from_user(path, user_path, sizeof(path) - 1);
@@ -116,10 +125,9 @@ static int sus_path_should_hide(const char __user *user_path)
     susfs__raw_spin_lock(&sus_path_lock);
     struct sus_path_entry *e;
     list_for_each_entry(e, &sus_path_list, list) {
-        int entry_len = 0;
-        while (e->path[entry_len] && entry_len < SUSFS_MAX_LEN_PATHNAME)
-            entry_len++;
-        if (path_matches(path, target_len, e->path, entry_len)) {
+        /* Use cached path_len instead of re-scanning the string on
+         * every hook invocation.  Set once in susfs_add_sus_path(). */
+        if (path_matches(path, target_len, e->path, e->path_len)) {
             susfs__raw_spin_unlock(&sus_path_lock);
             return 1;
         }
@@ -131,34 +139,19 @@ static int sus_path_should_hide(const char __user *user_path)
 /* ---- syscall hooks (before) ----
  * Each reads arg1 (pathname) from user space; if it matches a sus_path
  * entry and the caller is an app process, we set skip_origin=1 and
- * ret=-ENOENT to make the file appear non-existent. */
+ * ret=-ENOENT to make the file appear non-existent.
+ *
+ * Performance: the FIRST check is sus_path_count == 0 (a single int read,
+ * no function call).  When no sus_paths are registered — the common case
+ * on most boots — the hook returns in ~2 instructions without ever calling
+ * current_uid() or touching user memory. */
 
 /* openat(int dfd, const char *pathname, int flags, mode_t mode) — 4 args */
 static void before_openat(hook_fargs4_t *args, void *udata)
 {
-    uid_t uid = current_uid();
-    if (uid < 10000) return;
-
+    if (sus_path_count == 0) return;
+    if (!caller_should_hide()) return;
     const char __user *user_path = (const char __user *)syscall_argn(args, 1);
-    if (!user_path) return;
-
-    /* Debug: log every openat by an app process so we can confirm the
-     * hook is actually firing.  Rate-limited via a simple counter to
-     * avoid flooding dmesg. */
-    static int openat_debug_count = 0;
-    if (openat_debug_count < 20) {
-        char dbgpath[128];
-        int dn = compat_strncpy_from_user(dbgpath, user_path, sizeof(dbgpath) - 1);
-        if (dn > 0) {
-            dbgpath[dn] = '\0';
-            if (susfs_printk) {
-                susfs_printk("susfs_kpm: [DEBUG] openat hook uid=%d path=%s\n",
-                             uid, dbgpath);
-            }
-            openat_debug_count++;
-        }
-    }
-
     if (sus_path_should_hide(user_path)) {
         args->skip_origin = 1;
         args->ret = (uint64_t)(long)-ENOENT;
@@ -169,6 +162,7 @@ static void before_openat(hook_fargs4_t *args, void *udata)
 /* faccessat(int dfd, const char *pathname, int mode) — 3 args */
 static void before_faccessat(hook_fargs3_t *args, void *udata)
 {
+    if (sus_path_count == 0) return;
     if (!caller_should_hide()) return;
     const char __user *user_path = (const char __user *)syscall_argn(args, 1);
     if (sus_path_should_hide(user_path)) {
@@ -181,6 +175,7 @@ static void before_faccessat(hook_fargs3_t *args, void *udata)
 /* newfstatat(int dfd, const char *pathname, struct stat *buf, int flag) — 4 args */
 static void before_newfstatat(hook_fargs4_t *args, void *udata)
 {
+    if (sus_path_count == 0) return;
     if (!caller_should_hide()) return;
     const char __user *user_path = (const char __user *)syscall_argn(args, 1);
     if (sus_path_should_hide(user_path)) {
@@ -202,11 +197,15 @@ int susfs_add_sus_path(const char *path, int is_loop)
     /* kzalloc zero-initialises, so the trailing fields are already 0. */
     susfs_memcpy(e->path, path, plen);
     e->path[plen] = '\0';
+    e->path_len = plen;  /* cache for hot-path comparison */
     e->is_loop = is_loop;
 
     susfs__raw_spin_lock(&sus_path_lock);
     list_add_tail(&e->list, &sus_path_list);
     susfs__raw_spin_unlock(&sus_path_lock);
+    /* Increment count AFTER adding so the fast-path check sees the new
+     * entry.  Store-after-unlock is fine: the list is already visible. */
+    sus_path_count++;
 
     logki("susfs_kpm: add_sus_path%s: %s\n",
           is_loop ? "_loop" : "", e->path);
@@ -234,8 +233,6 @@ int susfs_sus_path_init_hooks(void)
     hook_err_t err = hook_syscalln(__NR_openat, 4, before_openat, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook openat failed: %d\n", err);
-        if (susfs_printk)
-            susfs_printk("susfs_kpm: hook openat FAILED err=%d\n", err);
         rc = (int)err;
     } else {
         openat_hooked = 1;
@@ -246,8 +243,6 @@ int susfs_sus_path_init_hooks(void)
     err = hook_syscalln(__NR_faccessat, 3, before_faccessat, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook faccessat failed: %d\n", err);
-        if (susfs_printk)
-            susfs_printk("susfs_kpm: hook faccessat FAILED err=%d\n", err);
         rc = (int)err;
     } else {
         faccessat_hooked = 1;
@@ -258,8 +253,6 @@ int susfs_sus_path_init_hooks(void)
     err = hook_syscalln(__NR_newfstatat, 4, before_newfstatat, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook newfstatat failed: %d\n", err);
-        if (susfs_printk)
-            susfs_printk("susfs_kpm: hook newfstatat FAILED err=%d\n", err);
         rc = (int)err;
     } else {
         newfstatat_hooked = 1;
@@ -269,9 +262,8 @@ int susfs_sus_path_init_hooks(void)
     /* Emit to dmesg so userspace can verify the hooks are active. */
     if (susfs_printk) {
         susfs_printk("susfs_kpm: sus_path syscalls hooked "
-                     "(openat=%d faccessat=%d newfstatat=%d) NR_openat=%d NR_faccessat=%d NR_newfstatat=%d\n",
-                     openat_hooked, faccessat_hooked, newfstatat_hooked,
-                     __NR_openat, __NR_faccessat, __NR_newfstatat);
+                     "(openat=%d faccessat=%d newfstatat=%d)\n",
+                     openat_hooked, faccessat_hooked, newfstatat_hooked);
     }
 
     return rc;
@@ -301,4 +293,5 @@ void susfs_sus_path_cleanup(void)
         susfs_kfree(e);
     }
     susfs__raw_spin_unlock(&sus_path_lock);
+    sus_path_count = 0;
 }

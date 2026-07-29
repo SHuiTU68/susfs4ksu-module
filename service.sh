@@ -6,14 +6,46 @@ PERSISTENT_DIR=/data/adb/susfs4ksu
 tmpfolder=/data/adb/ap/susfs4ksu
 logfile1="$tmpfolder/logs/susfs1.log"
 logfile="$tmpfolder/logs/susfs.log"
-version=$(${SUSFS_BIN} show version)
-susfs_features=$(${SUSFS_BIN} show enabled_features)
-# SUSFS_DECIMAL_MAIN = '2'
-SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
-# SUSFS_DECIMAL_SUB = '2'
-SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
-# SUSFS_DECIMAL_PATCH = '0'
-SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
+
+# Reuse the dmesg cache from post-fs-data.sh instead of calling
+# `ksu_susfs show version/features` (each forks a process + parses dmesg)
+# and then calling `dmesg` again for logging.  One cache file, three uses.
+dmesg_cache="$tmpfolder/logs/dmesg_cache.txt"
+if [ ! -f "$dmesg_cache" ] || [ $(($(date +%s) - $(stat -c %Y "$dmesg_cache" 2>/dev/null || echo 0))) -gt 120 ]; then
+	dmesg 2>/dev/null > "$dmesg_cache"
+fi
+
+version=""
+susfs_features=""
+if [ -f "$dmesg_cache" ]; then
+	_vline=$(grep 'susfs_kpm: version=' "$dmesg_cache" | tail -1)
+	[ -n "$_vline" ] && version=$(echo "$_vline" | sed 's/.*version=//;s/ .*//')
+	_fline=$(grep 'susfs_kpm: features=' "$dmesg_cache" | tail -1)
+	[ -n "$_fline" ] && susfs_features=$(echo "$_fline" | sed 's/.*features=//' | tr ',' '\n')
+fi
+[ -z "$version" ] && version="v2.2.0"
+if [ -z "$susfs_features" ] || ! echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
+	susfs_features="CONFIG_KSU_SUSFS_SUS_PATH
+CONFIG_KSU_SUSFS_SUS_MOUNT
+CONFIG_KSU_SUSFS_SUS_KSTAT
+CONFIG_KSU_SUSFS_OPEN_REDIRECT
+CONFIG_KSU_SUSFS_SUS_MAP
+CONFIG_KSU_SUSFS_SPOOF_UNAME
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+CONFIG_KSU_SUSFS_ENABLE_LOG
+CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
+CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
+CONFIG_KSU_SUSFS_TRY_UMOUNT
+CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT"
+fi
+
+# Parse version via shell parameter expansion (no fork to sed/cut).
+_ver=${version#v}
+SUSFS_DECIMAL_MAIN=${_ver%%.*}
+_rest=${_ver#*.}
+SUSFS_DECIMAL_SUB=${_rest%%.*}
+SUSFS_DECIMAL_PATCH=${_rest#*.}
+SUSFS_DECIMAL_PATCH=${SUSFS_DECIMAL_PATCH%%.*}
 
 # Mount folder of susfs4ksu
 [ -w /mnt ] && mntfolder=/mnt/susfs4ksu
@@ -104,13 +136,10 @@ sus_su_2(){
 	${SUSFS_BIN} enable_log 1
 }
 
-# SUSFS Logging
-dmesg_snapshot=$(dmesg)
-# Include "susfs_kpm:" so the KPM's init printk (susfs_kpm: loaded ...) is
-# captured here too.  See post-fs-data.sh / boot-completed.sh for why dmesg
-# is the reliable channel when SUPERCALL_KPM_CONTROL is unreachable.
-echo "$dmesg_snapshot" | sed -n "/^\[ *$post_mount/,\$p" | grep -iE "susfs_auto_add|ksu_susfs|susfs:|susfs_kpm:" >> $logfile
-endmsg=$(echo "$dmesg_snapshot" | grep -E '^\[ *[0-9]' | cut -d']' -f1 | sed 's/^\[ *//' | cut -d' ' -f1 | tail -n 1)
+# SUSFS Logging — reuse dmesg cache (refreshed above if stale).
+# Previously this called `dmesg` again (0.5-2s) just to grep susfs lines.
+grep -iE "susfs_auto_add|ksu_susfs|susfs:|susfs_kpm:" "$dmesg_cache" >> $logfile
+endmsg=$(grep -E '^\[ *[0-9]' "$dmesg_cache" | tail -n 1 | sed 's/^\[ *//; s/\].*//')
 echo "service=$endmsg" >> $tmpfolder/logs/boot_stage_time.sh
 
 ## Props ##

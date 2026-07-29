@@ -58,12 +58,14 @@ if [ -z "$version" ]; then
 	version="v2.2.0"
 fi
 
-# SUSFS_DECIMAL_MAIN = '2'
-SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
-# SUSFS_DECIMAL_SUB = '2'
-SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
-# SUSFS_DECIMAL_PATCH = '0'
-SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
+# Parse version "v2.2.0" → MAIN=2 SUB=2 PATCH=0 using shell parameter
+# expansion (no fork to sed/cut — saves 3 process spawns per script).
+_ver=${version#v}            # strip leading 'v'
+SUSFS_DECIMAL_MAIN=${_ver%%.*}
+_rest=${_ver#*.}
+SUSFS_DECIMAL_SUB=${_rest%%.*}
+SUSFS_DECIMAL_PATCH=${_rest#*.}
+SUSFS_DECIMAL_PATCH=${SUSFS_DECIMAL_PATCH%%.*}
 
 # Mount folder of susfs4ksu
 [ -w /mnt ] && mntfolder=/mnt/susfs4ksu
@@ -294,8 +296,8 @@ fi
 }
 
 
-# SUSFS Logging
-dmesg_snapshot=$(dmesg)
-echo "$dmesg_snapshot" | grep -iE "susfs_auto_add|ksu_susfs|susfs_kpm|susfs:" > $logfile
-endmsg=$(echo "$dmesg_snapshot" | grep -E '^\[ *[0-9]' | cut -d']' -f1 | sed 's/^\[ *//' | cut -d' ' -f1 | tail -n 1)
+# SUSFS Logging — reuse the dmesg cache from Step 1 instead of calling
+# `dmesg` a second time (each call reads the entire ring buffer, 0.5-2s).
+grep -iE "susfs_auto_add|ksu_susfs|susfs_kpm|susfs:" "$dmesg_cache" > $logfile
+endmsg=$(grep -E '^\[ *[0-9]' "$dmesg_cache" | tail -n 1 | sed 's/^\[ *//; s/\].*//')
 echo "post_fs_data=$endmsg" > $tmpfolder/logs/boot_stage_time.sh

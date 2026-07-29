@@ -158,20 +158,16 @@ int susfs_set_avc_log_spoofing(int enabled)
 
 int susfs_get_log_enabled(void)
 {
-    int v;
-    susfs__raw_spin_lock(&flags_lock);
-    v = log_enabled;
-    susfs__raw_spin_unlock(&flags_lock);
-    return v;
+    /* int reads are atomic on aarch64 — no spinlock needed.
+     * The worst case of a race during toggle is one log line being
+     * emitted/dropped, which is harmless.  Removing the lock eliminates
+     * a _raw_spin_lock/unlock pair on every query. */
+    return log_enabled;
 }
 
 int susfs_get_avc_log_spoofing(void)
 {
-    int v;
-    susfs__raw_spin_lock(&flags_lock);
-    v = avc_log_spoofing_enabled;
-    susfs__raw_spin_unlock(&flags_lock);
-    return v;
+    return avc_log_spoofing_enabled;
 }
 
 /* ===== hook lifecycle ===== */

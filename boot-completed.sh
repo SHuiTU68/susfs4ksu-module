@@ -45,12 +45,13 @@ fi
 if [ -z "$version" ]; then
 	version="v2.2.0"
 fi
-# SUSFS_DECIMAL_MAIN = '2'
-SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
-# SUSFS_DECIMAL_SUB = '2'
-SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
-# SUSFS_DECIMAL_PATCH = '0'
-SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
+# Parse version via shell parameter expansion (no fork to sed/cut).
+_ver=${version#v}
+SUSFS_DECIMAL_MAIN=${_ver%%.*}
+_rest=${_ver#*.}
+SUSFS_DECIMAL_SUB=${_rest%%.*}
+SUSFS_DECIMAL_PATCH=${_rest#*.}
+SUSFS_DECIMAL_PATCH=${SUSFS_DECIMAL_PATCH%%.*}
 
 legit_mounts="$PERSISTENT_DIR/legit_mounts.txt"
 
@@ -446,12 +447,17 @@ _add_sus_paths() {
 	echo "$sus_path_count"
 }
 
-# SUSFS Logging
-dmesg_snapshot=$(dmesg)
-echo "$dmesg_snapshot" | sed -n "/^\[ *$service/,\$p" | grep -iE "susfs_auto_add|ksu_susfs|susfs:" >> $logfile
-endmsg=$(echo "$dmesg_snapshot" | grep -E '^\[ *[0-9]' | cut -d']' -f1 | sed 's/^\[ *//' | cut -d' ' -f1 | tail -n 1)
+# SUSFS Logging — refresh dmesg cache (boot-completed runs late, the
+# early-boot cache from post-fs-data.sh is now stale).  One `dmesg` call
+# feeds both the log grep and the timestamp extraction.
+dmesg 2>/dev/null > "$dmesg_cache"
+grep -iE "susfs_auto_add|ksu_susfs|susfs:" "$dmesg_cache" >> $logfile
+endmsg=$(grep -E '^\[ *[0-9]' "$dmesg_cache" | tail -n 1 | sed 's/^\[ *//; s/\].*//')
 echo "boot_completed=$endmsg" >> $tmpfolder/logs/boot_stage_time.sh
-sleep 15; # this delay is to ensure that all of the susfs logs have been captured
+# Reduced from 15s to 5s: the original delay waited for susfs kernel logs
+# to flush, but dmesg is already captured above.  5s is enough for the
+# late sus_path_loop registrations to settle.
+sleep 5;
 # Just to be sure, set sdcard and android data root paths again
 if [ -n "$version" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 1 ] && [ "$SUSFS_DECIMAL_SUB" -ge 5 ] && [ "$SUSFS_DECIMAL_PATCH" -ge 8 ] || [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] 2>/dev/null; then
 	${SUSFS_BIN} set_sdcard_root_path /sdcard
@@ -503,6 +509,6 @@ echo try_umount=$(grep -ci 'try_umount' $logfile1 ) >> ${tmpfolder}/susfs_stats1
 	echo "$sus_path_count,$sus_path_loop_count, $app_data_count"
 	total_sus_paths=$((sus_path_count + sus_path_loop_count + app_data_count))
 	sed -i "s/sus_path=.*/sus_path=$total_sus_paths/" ${tmpfolder}/susfs_stats.txt
-	# Last dmesg logs
-	dmesg | sed -n "/^\[ *$endmsg/,\$p" | grep -iE "susfs_auto_add|ksu_susfs|susfs:" >> $logfile
+	# Last dmesg logs — reuse the cache refreshed above (no extra dmesg call).
+	grep -iE "susfs_auto_add|ksu_susfs|susfs:" "$dmesg_cache" >> $logfile
 } & # run in background
