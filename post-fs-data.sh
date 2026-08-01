@@ -16,6 +16,9 @@ SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
 SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
 # SUSFS_DECIMAL_PATCH = '3'
 SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
+# hookless SUSFS reports v0.2 + non-CONFIG feature names; normalize so the
+# base's version/feature gates recognise the features hookless supports.
+susfs_hookless_normalize
 
 # Mount folder of susfs4ksu
 [ -w /mnt ] && mntfolder=/mnt/susfs4ksu

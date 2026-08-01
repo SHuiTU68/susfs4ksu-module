@@ -1,6 +1,9 @@
 susfs_log=1
-sus_su=2
-sus_su_active=2
+# hookless SUSFS (KernelSU-Next susfs-hookless) disables sus_su (it needs the
+# core kprobe hooks hookless removes), so default it off here. The base's
+# service.sh feature-check then sets it to -1 without ever invoking sus_su.
+sus_su=0
+sus_su_active=0
 hide_cusrom=0
 hide_vendor_sepolicy=0
 hide_compat_matrix=0

@@ -14,18 +14,24 @@ logfile1="$tmpfolder/logs/susfs1.log"
 post_fs_data=0
 [ -f $tmpfolder/logs/boot_stage_time.sh ] && . $tmpfolder/logs/boot_stage_time.sh
 
+# hookless SUSFS removes the per-path add_sus_mount / add_try_umount commands
+# (mount hiding is the global hide_sus_mnts_for_non_su_procs toggle + KSU umount
+# policy), so gate them on the feature like the rest of the base does.
+susfs_features=$(${SUSFS_BIN} show enabled_features)
+susfs_hookless_normalize
+
 # to add mounts
 # echo "/system" >> /data/adb/susfs4ksu/sus_mount.txt
 # this'll make it easier for the webui to do stuff
 # Check and process sus_mount paths
-if grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" > /dev/null; then
+if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
     grep -v "#" "$PERSISTENT_DIR/sus_mount.txt" | while read -r i; do
         [ -z "$i" ] || { ${SUSFS_BIN} add_sus_mount "$i" && echo "[sus_mount]: susfs4ksu/post-mount $i" >> "$logfile1"; }
     done
 fi
 
 # Check and process try_umount paths
-if grep -v "#" "$PERSISTENT_DIR/try_umount.txt" > /dev/null; then
+if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
     grep -v "#" "$PERSISTENT_DIR/try_umount.txt" | while read -r i; do
         [ -z "$i" ] || { ${SUSFS_BIN} add_try_umount "$i" 1 && echo "[try_umount]: susfs4ksu/post-mount $i" >> "$logfile1"; }
     done

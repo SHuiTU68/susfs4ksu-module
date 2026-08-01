@@ -15,6 +15,9 @@ SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
 SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
 # SUSFS_DECIMAL_PATCH = '3'
 SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
+# hookless SUSFS reports v0.2 + non-CONFIG feature names; normalize so the
+# base's version/feature gates recognise the features hookless supports.
+susfs_hookless_normalize
 
 legit_mounts="$PERSISTENT_DIR/legit_mounts.txt"
 
@@ -333,8 +336,13 @@ until [ -d "/sdcard/Android/data" ] || [ $count -ge $max_attempts ]; do
 	count=$((count + 1))
 done
 if [ -n "$version" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 1 ] && [ "$SUSFS_DECIMAL_SUB" -ge 5 ] && [ "$SUSFS_DECIMAL_PATCH" -ge 8 ] || [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] 2>/dev/null; then
-	${SUSFS_BIN} set_sdcard_root_path /sdcard
-	${SUSFS_BIN} set_android_data_root_path /sdcard/Android/data
+	# set_sdcard_root_path / set_android_data_root_path are not wired in
+	# hookless SUSFS (its sus_path works without them), so skip the noisy
+	# "operation not supported" errors there.
+	if ! susfs_is_hookless; then
+		${SUSFS_BIN} set_sdcard_root_path /sdcard
+		${SUSFS_BIN} set_android_data_root_path /sdcard/Android/data
+	fi
 fi
 
 # Helper: read paths from a file and add them via susfs, with optional wait-for-existence retry
@@ -370,8 +378,13 @@ echo "boot_completed=$endmsg" >> $tmpfolder/logs/boot_stage_time.sh
 sleep 15; # this delay is to ensure that all of the susfs logs have been captured
 # Just to be sure, set sdcard and android data root paths again
 if [ -n "$version" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 1 ] && [ "$SUSFS_DECIMAL_SUB" -ge 5 ] && [ "$SUSFS_DECIMAL_PATCH" -ge 8 ] || [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] 2>/dev/null; then
-	${SUSFS_BIN} set_sdcard_root_path /sdcard
-	${SUSFS_BIN} set_android_data_root_path /sdcard/Android/data
+	# set_sdcard_root_path / set_android_data_root_path are not wired in
+	# hookless SUSFS (its sus_path works without them), so skip the noisy
+	# "operation not supported" errors there.
+	if ! susfs_is_hookless; then
+		${SUSFS_BIN} set_sdcard_root_path /sdcard
+		${SUSFS_BIN} set_android_data_root_path /sdcard/Android/data
+	fi
 fi
 
 # Generate susfs stats

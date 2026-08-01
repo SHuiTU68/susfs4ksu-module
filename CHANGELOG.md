@@ -1,3 +1,44 @@
+## hookless branch (based on v1.5.2+ R28)
+### Notes
+This branch adapts the module for the **KernelSU-Next `susfs-hookless`** kernel
+([MirahSyakilla/KSUN](https://github.com/MirahSyakilla/KSUN)), which moved SUSFS
+inside KernelSU-Next and talks to userspace via the `reboot(0xDEADBEEF,
+0xFAFAFAFA, cmd)` supercall — the same protocol the module's `ksu_susfs`
+universal binary already uses, so the stock binary works unchanged.
+
+### Why a separate branch
+hookless SUSFS reports `version=v0.2`, `variant=hookless`, and feature names
+like `sus_path` / `open_redirect` (NOT `CONFIG_KSU_SUSFS_*`). The base scripts
+gate features on `>= 1.5.x` version and `CONFIG_KSU_SUSFS_*` names, so on
+hookless most features were wrongly skipped. `utils.sh:susfs_hookless_normalize`
+(re-run after the version/features probe in each boot script) detects hookless
+and:
+* bumps the decimal version to 2.5.9 so the base's v2.x code paths run for the
+  features hookless supports (hide_sus_mnts, set_cmdline_or_bootconfig,
+  open_redirect uid_scheme, sus_path_loop, ...);
+* injects `CONFIG_KSU_SUSFS_OPEN_REDIRECT` / `CONFIG_KSU_SUSFS_SUS_MAP` so the
+  feature gates recognise them.
+
+### hookless limitations (by design)
+hookless removed these commands, so they are skipped (feature-gated out):
+* `add_sus_mount` / `add_try_umount` — per-path mount hiding is gone; mount
+  hiding is the global `hide_sus_mnts_for_non_su_procs` toggle + KSU umount
+  policy (the base already falls back from `hide_sus_mnts_for_all_procs` to
+  `_for_non_su_procs`, and uses `ksud kernel umount add` on v2.x).
+* `sus_su` — needs the core kprobe hooks hookless disables; `config.sh`
+  defaults `sus_su=0` and the base's feature check sets it to -1 without ever
+  invoking `sus_su`.
+* `set_sdcard_root_path` / `set_android_data_root_path` — not wired in hookless;
+  guarded with `susfs_is_hookless` to avoid noisy "not supported" errors.
+
+### Known caveat
+The WebUI frontend reads `ksu_susfs show enabled_features` directly (not through
+the shell normalize), and hookless's feature names don't match the
+`CONFIG_KSU_SUSFS_*` strings the WebUI checks, so some status badges may show
+"Disabled" and a few custom-path editors may be hidden even though the features
+work. The module scripts themselves are fully functional. Editing the path
+`.txt` files directly always works.
+
 ## v1.5.2+ Revision 28
 ### Notes
 Sorry for the very late update. This update focuses on WebUI configuration import/export, boot-stage script performance and correctness fixes, and better handling of newer susfs (v2.0.0+/v2.1.0+) kernel implementations.

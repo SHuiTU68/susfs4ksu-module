@@ -1,6 +1,6 @@
 {
-    "version": "v1.5.2-R28",
-    "versionCode": 105002028,
-    "zipUrl": "https://github.com/sidex15/ksu_module_susfs/releases/latest/download/ksu_module_susfs_1.5.2+.zip",
-    "changelog": "https://raw.githubusercontent.com/sidex15/ksu_module_susfs/v1.5.2+/CHANGELOG.md"
+    "version": "v1.5.2-R28-hookless",
+    "versionCode": 105002029,
+    "zipUrl": "https://github.com/SHuiTU68/susfs4ksu-module/releases/latest/download/ksu_module_susfs_hookless.zip",
+    "changelog": "https://raw.githubusercontent.com/SHuiTU68/susfs4ksu-module/hookless/CHANGELOG.md"
 }

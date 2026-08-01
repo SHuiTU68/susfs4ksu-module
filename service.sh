@@ -14,6 +14,9 @@ SUSFS_DECIMAL_MAIN=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f1)
 SUSFS_DECIMAL_SUB=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f2)
 # SUSFS_DECIMAL_PATCH = '3'
 SUSFS_DECIMAL_PATCH=$(echo "$version" | sed 's/^v//;' | cut -d'.' -f3)
+# hookless SUSFS reports v0.2 + non-CONFIG feature names; normalize so the
+# base's version/feature gates recognise the features hookless supports.
+susfs_hookless_normalize
 
 # Mount folder of susfs4ksu
 [ -w /mnt ] && mntfolder=/mnt/susfs4ksu
@@ -213,7 +216,7 @@ fi
 			[ "$SUSFS_DECIMAL_MAIN" = 2 ] && [ "$SUSFS_DECIMAL_SUB" = 0 ] || [ "$SUSFS_DECIMAL_MAIN" -lt 2 ] && susfs_clone_perm $mntfolder/$cil_name $sepolicy_cil
 			mount --bind $mntfolder/$cil_name $sepolicy_cil && echo "[bind_mount]: susfs4ksu/service $sepolicy_cil" >> $logfile1
 			[ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ${SUSFS_BIN} update_sus_kstat $sepolicy_cil && echo "[update_sus_kstat]: susfs4ksu/service $sepolicy_cil" >> $logfile1
-			${SUSFS_BIN} add_sus_mount $sepolicy_cil && echo "[sus_mount]: susfs4ksu/service $sepolicy_cil" >> $logfile1
+			echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT" && ${SUSFS_BIN} add_sus_mount $sepolicy_cil && echo "[sus_mount]: susfs4ksu/service $sepolicy_cil" >> $logfile1
 		}
 	done
 }
@@ -228,7 +231,7 @@ fi
 		[ "$SUSFS_DECIMAL_MAIN" = 2 ] && [ "$SUSFS_DECIMAL_SUB" = 0 ] || [ "$SUSFS_DECIMAL_MAIN" -lt 2 ] && susfs_clone_perm $mntfolder/compatibility_matrix.device.xml $compatibility_matrix
 		mount --bind $mntfolder/compatibility_matrix.device.xml $compatibility_matrix && echo "[bind_mount]: susfs4ksu/service $compatibility_matrix" >> $logfile1
 		[ "$SUSFS_DECIMAL_MAIN" -ge 2 ] && ${SUSFS_BIN} update_sus_kstat $compatibility_matrix && echo "[update_sus_kstat]: susfs4ksu/service $compatibility_matrix" >> $logfile1
-		${SUSFS_BIN} add_sus_mount $compatibility_matrix && echo "[sus_mount]: susfs4ksu/service $compatibility_matrix" >> $logfile1
+		echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT" && ${SUSFS_BIN} add_sus_mount $compatibility_matrix && echo "[sus_mount]: susfs4ksu/service $compatibility_matrix" >> $logfile1
 	}
 }
 	

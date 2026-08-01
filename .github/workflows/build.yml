@@ -2,38 +2,72 @@ name: Build and Release
 
 on:
   push:
-    paths-ignore:
-      - 'README.md'
-      - '*.md'
-      - 'docs/**'
-      - '.github/ISSUE_TEMPLATE/**'
+    branches:
+      - hookless
+    tags:
+      - 'v*-hookless*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout v1.5.2+ branch
+      - name: Checkout hookless branch
         uses: actions/checkout@v4
-        with:
-          ref: v1.5.2+
 
-      - name: Update version with git HEAD
+      - name: Build module zip
         run: |
-          RANDOM_STRING=$(git rev-parse --short HEAD | cut -c1-7)
-          echo "BUILD_ID=${RANDOM_STRING}" >> $GITHUB_ENV
-          sed -i "s/version=v1.5.2-R.*/version=v1.5.2-CI-${RANDOM_STRING}/" module.prop
+          # Stamp CI builds with the short sha; tagged releases keep the
+          # version string already baked into module.prop.
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            SHA=$(git rev-parse --short HEAD | cut -c1-7)
+            sed -i "s/version=v1.5.2-R28-hookless/version=v1.5.2-CI-${SHA}-hookless/" module.prop
+          fi
 
-      - name: Upload release artifact
+          # Pack the flashable zip: module files at the zip root, exclude
+          # VCS / workflow / dev-only files. The asset name matches
+          # update.json's zipUrl so the in-app updater resolves.
+          zip -r ksu_module_susfs_hookless.zip . \
+            -x '.git/*' \
+            -x '.github/*' \
+            -x '*.md' \
+            -x 'LICENSE' \
+            -x '.gitignore'
+
+          echo "=== zip contents ==="
+          unzip -l ksu_module_susfs_hookless.zip | head -40
+          echo "=== module.prop ==="
+          cat module.prop
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-1.5.2+_${{ env.BUILD_ID }}
-          path: |
-            ${{ github.workspace }}/**/*
-            !${{ github.workspace }}/.git/**
-            !${{ github.workspace }}/.github/**
-            !${{ github.workspace }}/node_modules/**
-            !${{ github.workspace }}/src/**
-            !${{ github.workspace }}/tests/**
-            !${{ github.workspace }}/README.md
-            !${{ github.workspace }}/LICENSE
+          name: ksu_module_susfs_hookless-${{ github.sha }}
+          path: ksu_module_susfs_hookless.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    # Publish a GitHub Release on tag pushes. The released asset is named
+    # ksu_module_susfs_hookless.zip so update.json's
+    # releases/latest/download/ksu_module_susfs_hookless.zip URL resolves.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, 'hookless')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ksu_module_susfs_hookless-${{ github.sha }}
+          path: release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release/ksu_module_susfs_hookless.zip
