@@ -75,14 +75,46 @@ chmod +x "${TMPDIR}/susfs/tools/ksu_susfs_arm64"
 # Example output = 'v1.5.3'
 SUSFS_VERSION_RAW="$(${TMPDIR}/susfs/tools/ksu_susfs_arm64 show version)"
 
+# hookless SUSFS (KernelSU-Next susfs-hookless) reports "v0.2" and the
+# universal binary's HAVE(153) gate rejects `show` with
+# "[-] Requires susfs v1.5.3+". Detect via the help banner, which always
+# prints "Detected kernel: susfs v0.2 (ABI: sys_reboot)". Without this the
+# installer prints "[-] Kernel is using susfs [-] Requires susfs v1.5.3+"
+# and SUSFS_DECIMAL_MAIN ends up non-numeric, skipping the v2.x sus_su
+# deprecation path.
+SUSFS_HOOKLESS=0
+case "$SUSFS_VERSION_RAW" in
+	*"Requires susfs"*)
+		_hookless_banner=$("${TMPDIR}/susfs/tools/ksu_susfs_arm64" 2>&1)
+		case "$_hookless_banner" in
+			*"susfs v0.2"*"sys_reboot"*)
+				SUSFS_HOOKLESS=1
+				SUSFS_VERSION_RAW="v0.2"
+				;;
+		esac
+		;;
+esac
+
 # dl logic, shorthand
 # download remote
 #    test binary; if fail use whats shipped
 # if dl fail; use whats shipped
 if [ -n "$SUSFS_VERSION_RAW" ] 2>/dev/null; then
-	ui_print "[-] Kernel is using susfs $SUSFS_VERSION_RAW"	
-	# SUSFS_DECIMAL_MAIN = '1'
-	SUSFS_DECIMAL_MAIN=$(echo "$SUSFS_VERSION_RAW" | sed 's/^v//;' | cut -d'.' -f1)
+	if [ "$SUSFS_HOOKLESS" = "1" ]; then
+		ui_print "[-] Kernel is using susfs $SUSFS_VERSION_RAW (hookless, KernelSU-Next susfs-hookless)"
+		ui_print "[-] Normalising to v2.5.9 so the installer's v2.x code paths run"
+		# hookless supports sus_path/sus_map/sus_kstat/spoof_uname/
+		# spoof_cmdline_or_bootconfig/open_redirect/enable_log/
+		# hide_ksu_susfs_symbols + the global hide_sus_mnts_for_non_su_procs
+		# toggle. It does NOT support sus_mount/try_umount/sus_su (those need
+		# the core kprobe hooks hookless removes), so SUSFS_DECIMAL_MAIN=2
+		# here only drives the sus_su deprecation branch below.
+		SUSFS_DECIMAL_MAIN=2
+	else
+		ui_print "[-] Kernel is using susfs $SUSFS_VERSION_RAW"
+		# SUSFS_DECIMAL_MAIN = '1'
+		SUSFS_DECIMAL_MAIN=$(echo "$SUSFS_VERSION_RAW" | sed 's/^v//;' | cut -d'.' -f1)
+	fi
 else
 	ui_print "[-] Kernel is using susfs v1.5.2"
 fi
@@ -98,6 +130,7 @@ if check "$base_url"; then
 	if [ $hash = $cloudhash > /dev/null 2>&1 ]; then
 		ui_print "[-] susfs local and cloud binary hash is the same"
 		ui_print "[-] skipping binary cloud update"
+		cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs.bin
 	else
 		ui_print "[-] Downloading latest susfs binary from the internet"
 		download "https://raw.githubusercontent.com/sidex15/susfs4ksu-binaries/universal-binary/ksu_susfs_arm64" > ${MODPATH}/ksu_susfs_remote
@@ -106,22 +139,49 @@ if check "$base_url"; then
 		if ${MODPATH}/ksu_susfs_remote > /dev/null 2>&1 ; then
 			# test ok
 			ui_print "[-] Downloaded susfs binary is working, using it for installation"
-			cp -f ${MODPATH}/ksu_susfs_remote ${DEST_BIN_DIR}/ksu_susfs
+			cp -f ${MODPATH}/ksu_susfs_remote ${DEST_BIN_DIR}/ksu_susfs.bin
 		else
 			# test failed
 			ui_print "[!] Downloaded susfs binary is not working, using local binary for installation"
-			cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs
+			cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs.bin
 		fi
 	fi
 else
 	# failed
 	ui_print "[!] No internet connection"
 	ui_print "[-] Using local susfs binaries"
-	cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs
+	cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs.bin
 fi
 
 # cleanup
 rm -f ${MODPATH}/ksu_susfs_remote > /dev/null 2>&1
+
+# Install the ksu_susfs wrapper (hookless branch only).
+# The real ELF lives at ksu_susfs.bin; this shell wrapper sits at ksu_susfs and
+# intercepts `show version|enabled_features|variant` on hookless kernels (where
+# the universal binary's HAVE(153) gate rejects the show command), returning
+# the normalised values that susfs_hookless_normalize cached at boot. All other
+# commands — and all calls on non-hookless kernels — `exec` the real binary
+# directly with zero overhead.
+ui_print "[-] Installing ksu_susfs wrapper (hookless show-command shim)"
+cp ${TMPDIR}/susfs/tools/ksu_susfs_wrapper.sh ${DEST_BIN_DIR}/ksu_susfs
+chmod 755 ${DEST_BIN_DIR}/ksu_susfs.bin ${DEST_BIN_DIR}/ksu_susfs
+
+# Pre-seed the hookless cache + susfs_active marker so the WebUI shows the
+# right state on first open (before the first reboot runs post-fs-data.sh).
+# Without this the WebUI pops "NUH UH! Unsupported Kernel!" (susfs_active
+# missing) and every feature badge shows "Disabled" (wrapper falls through
+# to the real binary which returns "[-] Requires susfs v1.5.3+").
+if [ "$SUSFS_HOOKLESS" = "1" ]; then
+	_seed_logdir=/data/adb/ksu/susfs4ksu/logs
+	mkdir -p "$_seed_logdir"
+	touch "$_seed_logdir/is_hookless"
+	printf 'v2.5.9\n' > "$_seed_logdir/hookless_version"
+	printf 'GKI\n' > "$_seed_logdir/hookless_variant"
+	printf 'CONFIG_KSU_SUSFS_SUS_PATH\nCONFIG_KSU_SUSFS_SUS_MAP\nCONFIG_KSU_SUSFS_SUS_KSTAT\nCONFIG_KSU_SUSFS_SPOOF_UNAME\nCONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG\nCONFIG_KSU_SUSFS_OPEN_REDIRECT\nCONFIG_KSU_SUSFS_ENABLE_LOG\nCONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS\n' > "$_seed_logdir/hookless_features"
+	touch "$_seed_logdir/susfs_active"
+	ui_print "[-] Pre-seeded hookless cache (logs/hookless_*) + susfs_active marker"
+fi
 
 # copy sus_su over
 if [ -n "$SUSFS_DECIMAL_MAIN" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 2 ]; then
@@ -130,7 +190,7 @@ if [ -n "$SUSFS_DECIMAL_MAIN" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 2 ]; then
 else
 	ui_print "[-] Installing sus_su"
 	cp ${TMPDIR}/susfs/tools/sus_su_arm64 ${DEST_BIN_DIR}/sus_su
-	chmod 755 ${DEST_BIN_DIR}/ksu_susfs ${DEST_BIN_DIR}/sus_su
+	chmod 755 ${DEST_BIN_DIR}/sus_su
 fi
 
 # set permissions
