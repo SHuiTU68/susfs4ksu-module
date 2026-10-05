@@ -359,8 +359,22 @@ static long susfs_init(const char *args, const char *event, void *reserved)
     /* Install the syscall command channel (hook __NR_kcmp).
      * This lets ksu_susfs control the KPM without supercall/is_authed —
      * critical for WebUI functionality on APatch without a preset superkey.
-     * See before_cmd_channel() below for details. */
-    hook_err_t hook_rc = hook_syscalln(__NR_kcmp, 5, before_cmd_channel, 0, 0);
+     * See before_cmd_channel() below for details.
+     *
+     * MUST use hook_syscalln_override(), NOT hook_syscalln():
+     * a callback may only suppress the real syscall (args->skip_origin=1,
+     * args->ret=<result>) when the slot was registered with allow_skip=1.
+     * hook_syscalln() registers with allow_skip=0, so KernelPatch refuses the
+     * skip and the real kcmp(pid1=<magic>,...) still executes — returning
+     * -ESRCH to userspace and making EVERY command look like a failure
+     * (this was the "susfs module not running" bug: reads worked because the
+     * reply buffer was still written, but userspace discarded it and fell
+     * back to dmesg/diag parsing, so the WebUI saw 1 of 14 features).
+     * hook_syscalln_override() sets allow_skip=1 + bypass_gate=1 and, when
+     * the global dispatcher is hooked at el0_svc_common (handler granularity
+     * unavailable), transparently falls back to the per-syscall mechanism,
+     * which implements skip_origin at handler granularity. */
+    hook_err_t hook_rc = hook_syscalln_override(__NR_kcmp, 5, before_cmd_channel, 0, 0);
     if (hook_rc != HOOK_NO_ERR) {
         logke("susfs_kpm: failed to hook __NR_kcmp for cmd channel (rc=%d)\n",
               hook_rc);
@@ -369,9 +383,14 @@ static long susfs_init(const char *args, const char *event, void *reserved)
                          "WebUI features will not work (rc=%d)\n", hook_rc);
         }
     } else {
-        logki("susfs_kpm: cmd channel hooked on __NR_kcmp\n");
+        logki("susfs_kpm: cmd channel hooked on __NR_kcmp (override mode)\n");
         if (susfs_printk) {
             susfs_printk("susfs_kpm: cmd_channel=enabled\n");
+            /* Machine-readable marker so scripts/userspace can tell an
+             * override-mode KPM (returns the real rc via skip_origin and via
+             * the optional 5th-arg result pointer) from an old one that
+             * leaked -ESRCH. */
+            susfs_printk("susfs_kpm: cmd_channel_mode=override\n");
         }
     }
 
@@ -584,22 +603,45 @@ KPM_EXIT(susfs_exit);
  * __NR_kcmp (syscall 272) — a rarely-used syscall (compares two processes'
  * resources) — and use it as a command channel.  When userspace calls:
  *
- *   syscall(272, SUSFS_CMD_MAGIC, cmd_buf_ptr, out_buf_ptr, out_buf_len)
+ *   syscall(272, SUSFS_CMD_MAGIC, cmd_buf_ptr, out_buf_ptr, out_buf_len,
+ *           rc_out_ptr)
  *
  * the before callback checks the magic; if it matches, it reads cmd_buf
  * from userspace, dispatches via susfs_ctl0(), writes the result to
- * out_buf, and short-circuits the original kcmp syscall.  Non-magic calls
- * pass through to the real kcmp unchanged.
+ * out_buf, publishes the real return value through rc_out_ptr (optional,
+ * may be NULL), and short-circuits the original kcmp syscall.  Non-magic
+ * calls pass through to the real kcmp unchanged.
+ *
+ * IMPORTANT — hook_syscalln_override() is mandatory here.  KernelPatch only
+ * honours skip_origin for slots registered with allow_skip=1; plain
+ * hook_syscalln() sets allow_skip=0, so the kernel keeps the real
+ * kcmp(pid1=<magic>, pid2=<cmd_ptr>, ...) call, which returns -ESRCH
+ * ("No such process") to userspace and made every command look failed.
+ * Between that and the before-hook the reply buffer IS written, so reads
+ * still returned data — which is exactly why the failure was silent: the
+ * CLI saw rc=-1, discarded the buffer, and fell back to parsing dmesg (which
+ * had already rotated) and then the diag file (which only stored the first
+ * feature on its "features:" line).  Result: the WebUI reported 1 of 14
+ * features and the module looked dead while the KPM was actually loaded.
+ *
+ * rc_out_ptr makes the protocol independent of skip support: even if a
+ * future kernel refuses skip_origin again, userspace still learns the real
+ * rc, and the stray kcmp call is harmless (it only looks up pids).
  *
  * __NR_kcmp is chosen because:
  *   - It exists on all Android 4.x+ kernels (arm64).
  *   - Normal apps never call it (it's for debug/analysis tools like perf).
  *   - It takes 5 args (pid1, pid2, type, idx1, idx2) so we have room for
- *     magic + cmd_buf + out_buf + out_len.
+ *     magic + cmd_buf + out_buf + out_len + rc_out.
  */
 
 #define __NR_kcmp 272
 #define SUSFS_CMD_MAGIC 0x5355534653595343ULL /* "SUSFSYSC" */
+
+/* Largest plausible user-space address (arm64 48-bit VA).  Used to reject
+ * garbage in the optional rc-out pointer before handing it to
+ * compat_copy_to_user(). */
+#define SUSFS_USER_ADDR_MAX (1UL << 48)
 
 static void before_cmd_channel(hook_fargs5_t *args, void *udata)
 {
@@ -611,11 +653,19 @@ static void before_cmd_channel(hook_fargs5_t *args, void *udata)
     const char __user *cmd_buf = (const char __user *)syscall_argn(args, 1);
     char __user *out_buf = (char __user *)syscall_argn(args, 2);
     int out_len = (int)syscall_argn(args, 3);
+    /* Optional 5th argument: int* that receives the real return value.  New
+     * userspace always supplies it; old userspace leaves it 0. */
+    int __user *rc_out = (int __user *)syscall_argn(args, 4);
+    int rc_out_ok = (rc_out && (unsigned long)rc_out < SUSFS_USER_ADDR_MAX);
 
     /* Read command string from userspace */
     char cmd[2048];
     int n = compat_strncpy_from_user(cmd, cmd_buf, sizeof(cmd) - 1);
     if (n <= 0) {
+        if (rc_out_ok) {
+            int e = -EINVAL;
+            compat_copy_to_user(rc_out, &e, sizeof(e));
+        }
         args->skip_origin = 1;
         args->ret = (uint64_t)(long)-EINVAL;
         return;
@@ -625,7 +675,14 @@ static void before_cmd_channel(hook_fargs5_t *args, void *udata)
     /* Dispatch via the same ctl0 handler used by supercall */
     long rc = susfs_ctl0(cmd, out_buf, out_len);
 
-    /* Short-circuit the original kcmp syscall; return rc as the result */
+    /* Publish the real rc where skip_origin cannot be relied upon. */
+    if (rc_out_ok) {
+        int rv = (int)rc;
+        compat_copy_to_user(rc_out, &rv, sizeof(rv));
+    }
+
+    /* Short-circuit the original kcmp syscall; return rc as the result.
+     * Honoured thanks to hook_syscalln_override() (allow_skip=1). */
     args->skip_origin = 1;
     args->ret = (uint64_t)(long)rc;
 }

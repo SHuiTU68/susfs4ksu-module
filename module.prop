@@ -1,7 +1,8 @@
 id=susfs4ksu
 name=SUSFS-FOR-APATCH-KPM
-version=v2.2.0-KPM-R30
-versionCode=200200030
+version=v2.3.0-KPM-R30
+versionCode=200300030
+kpmVersion=2.3.0
 author=sidex15 & simonpunk (KPM port)
 description=susfs reimplementation for APatch via KernelPatch Module (KPM). Targets android15-6.6 GKI. No sus_su.
 banner=banner.png

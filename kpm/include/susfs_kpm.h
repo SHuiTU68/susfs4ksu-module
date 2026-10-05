@@ -122,7 +122,8 @@ extern int (*susfs_printk)(const char *fmt, ...);
 #define __NEW_UTS_LEN                       64
 
 /* KPM identity exposed to userspace.
- * VERSION is set to "2.2.0" so that:
+ * VERSION tracks the upstream susfs release this KPM reimplements
+ * (currently v2.3.0) so that:
  *   - The WebUI kernel-support status page shows the 4 try_umount / auto-*
  *     features as "Deprecated" (their deprecated threshold is 2.0.0 in the
  *     WebUI JS).  This is honest: this KPM implements them via a hybrid
@@ -136,10 +137,15 @@ extern int (*susfs_printk)(const char *fmt, ...);
  *     fallback branches stay skipped and the native add_try_umount path
  *     runs instead — exactly what we want.
  *   - The WebUI's `!v(n,2,1,0)` gate on try_umount_zygote_toggle was
- *     removed so the toggle stays available even at 2.2.0 (the feature
- *     is deprecated but manually usable). */
+ *     removed so the toggle stays available even at 2.2.0+ (the feature
+ *     is deprecated but manually usable).
+ *
+ * NOTE: modinfo/show() reads this at runtime.  The module scripts compare it
+ * against the deployed .kpm to detect a *stale boot-image copy* shadowing the
+ * module's own KPM (see post-fs-data.sh), so bump this whenever the KPM is
+ * rebuilt and shipped in a module release. */
 #define SUSFS_KPM_NAME    "susfs_kpm"
-#define SUSFS_KPM_VERSION "2.2.0"
+#define SUSFS_KPM_VERSION "2.3.0"
 #define SUSFS_KPM_VARIANT "GKI-APATCH"
 
 /* UID schemes for open_redirect (mirror upstream enum) */

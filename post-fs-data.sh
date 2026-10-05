@@ -10,39 +10,89 @@ logfile="$tmpfolder/logs/susfs.log"
 logfile1="$tmpfolder/logs/susfs1.log"
 
 # Step 1: Cache dmesg ONCE — `dmesg` reads the entire kernel ring buffer
-# and can take 0.5-2s per call.  We used to call it 4+ times (once here,
-# then again inside each `ksu_susfs show` call).  Now we read it once
-# into a temp file and grep from that.
+# and can take 0.5-2s per call.  We read it once into a temp file and grep
+# from that.
 #
 # Performance: on OEM kernels (OPPO/OnePlus/etc.) the ring buffer can be
 # several MB.  Writing the entire buffer to flash causes IO contention
-# during early boot.  We pipe dmesg through grep to keep ONLY susfs-
-# relevant lines — the cache file is typically < 2 KB instead of MBs.
-# The timestamp pattern `^\[ *[0-9]` is preserved so boot-stage
-# extraction still works.
+# during early boot, so we keep ONLY susfs-related lines.
+#
+# NOTE: this used to also match `^\[ *[0-9]`, i.e. every log line — the
+# "cache" was a full 2 MB dmesg copy (measured on this device) that never
+# contained the KPM lines anyway, because KernelPatch loads store KPMs at
+# the post-fs-data user event, i.e. *after* this script.  The command
+# channel probe below is the reliable detector; dmesg is only a fallback
+# for the boot-image case where the printk happened long before us.
 dmesg_cache="$tmpfolder/logs/dmesg_cache.txt"
-dmesg 2>/dev/null | grep -iE 'susfs:|susfs_kpm:|^\[ *[0-9]' > "$dmesg_cache"
+dmesg 2>/dev/null | grep -iE 'susfs' > "$dmesg_cache"
 
 kpm_in_dmesg=0
 if grep -qE "susfs:|susfs_kpm:" "$dmesg_cache" 2>/dev/null; then
 	kpm_in_dmesg=1
 fi
 
-# ksu_susfs show version/features/variant parse dmesg.  To avoid 3 more
-# `dmesg` calls, we parse the cached output directly here.
+# ---- KPM identity -------------------------------------------------------
+# Order of truth:
+#   1. the kcmp command channel (`ksu_susfs show ...`) — it is the ONLY
+#      source that reflects the KPM that is *actually running*, needs no
+#      superkey, and cannot be fooled by dmesg rotation.  The KPM always
+#      answers on it, whether it was loaded from the boot image (APatch
+#      embed) or from /data/adb/ap/kpm/.
+#   2. the dmesg cache — only useful for a boot-image KPM whose "loaded"
+#      printk predates this script (a store KPM loads later, so it is
+#      invisible here).
+#   3. module.prop:kpmVersion — the version this module shipped.  Clearly
+#      flagged as a fallback so nobody reads it as a live value.
+#
+# Version expected by this module release (single source: module.prop).
+KPM_EXPECTED_VERSION=$(sed -n 's/^kpmVersion=//p' ${MODDIR}/module.prop 2>/dev/null | head -1)
+[ -z "$KPM_EXPECTED_VERSION" ] && KPM_EXPECTED_VERSION=2.3.0
+
 susfs_features=""
 version=""
-if [ $kpm_in_dmesg -eq 1 ]; then
+susfs_variant=""
+kpm_source="none"
+version_is_fallback=0
+
+# (1) Command channel probe.
+#
+# Both outputs are validated before being trusted: a foreign/outdated
+# ksu_susfs binary (e.g. one pulled from a KSU binary channel) prints its
+# error text to *stdout*, which would otherwise be mistaken for a live
+# version and make a dead KPM look healthy.
+version=$(${SUSFS_BIN} show version 2>/dev/null | head -1 | tr -d '\r')
+case "$version" in
+v[0-9]*.[0-9]*|[0-9]*.[0-9]*) ;;
+*) version="" ;;
+esac
+if [ -n "$version" ]; then
+	kpm_source="channel"
+	susfs_variant=$(${SUSFS_BIN} show variant 2>/dev/null | head -1 | tr -d '\r')
+	case "$susfs_variant" in
+	*GKI*|*APATCH*) ;;
+	*) susfs_variant="" ;;
+	esac
+	susfs_features=$(${SUSFS_BIN} show enabled_features 2>/dev/null | grep '^CONFIG_' | tr -d '\r')
+fi
+
+# (2) dmesg cache fallback (boot-image KPM case).
+kpm_in_dmesg=0
+if grep -qE "susfs:|susfs_kpm:" "$dmesg_cache" 2>/dev/null; then
+	kpm_in_dmesg=1
+fi
+if [ "$kpm_source" = "none" ] && [ $kpm_in_dmesg -eq 1 ]; then
 	# Parse features from dmesg cache: "features=CONFIG_...,CONFIG_..."
 	_features_line=$(grep 'susfs_kpm: features=' "$dmesg_cache" | tail -1)
 	if [ -n "$_features_line" ]; then
 		susfs_features=$(echo "$_features_line" | sed 's/.*features=//' | tr ',' '\n')
 	fi
-	# Parse version from dmesg cache: "version=2.2.0"
+	# Parse version from dmesg cache: "version=2.3.0"
 	_version_line=$(grep 'susfs_kpm: version=' "$dmesg_cache" | tail -1)
 	if [ -n "$_version_line" ]; then
 		version=$(echo "$_version_line" | sed 's/.*version=//;s/ .*//')
+		susfs_variant=$(echo "$_version_line" | sed 's/.*variant=//;s/ .*//')
 	fi
+	[ -n "$version" ] && kpm_source="dmesg"
 fi
 # Fallback: if show enabled_features fails, default to the builtin feature
 # list so feature-gated blocks below still run.
@@ -60,9 +110,14 @@ CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
 CONFIG_KSU_SUSFS_TRY_UMOUNT
 CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT"
 fi
-# Fallback version if show version fails
+# Last-resort fallback version — the version this module release shipped
+# (module.prop:kpmVersion).  Only used when neither the command channel nor
+# the dmesg cache could report a live value; the diag file records that, so
+# it is never mistaken for a live reading.
 if [ -z "$version" ]; then
-	version="v2.2.0"
+	version="v${KPM_EXPECTED_VERSION}"
+	version_is_fallback=1
+	kpm_source="builtin"
 fi
 
 # Parse version "v2.2.0" → MAIN=2 SUB=2 PATCH=0 using shell parameter
@@ -79,46 +134,57 @@ SUSFS_DECIMAL_PATCH=${SUSFS_DECIMAL_PATCH%%.*}
 [ -w /mnt/vendor ] && mntfolder=/mnt/vendor/susfs4ksu
 mkdir -p $mntfolder
 
-# Determine whether the susfs KPM is actually loaded and reachable.
-# Step 1 (dmesg) already told us if the KPM is loaded; step 2 (supercall)
-# tells us if superkey extraction succeeded.  We set susfs_active if
-# EITHER succeeds — the WebUI needs the flag to not show the "unsupported
-# kernel" dialog even when superkey extraction is still pending.
+# Decide the KPM status from the *live* sources only.
+#
+# live=1 means a command-channel reply (or a dmesg "loaded" line) proved the
+# KPM is running.  The WebUI uses susfs_active to decide whether to show the
+# "unsupported kernel" dialog, so we only create it when we really reached
+# the KPM.  The old code set it unconditionally (because the builtin feature
+# list always looked non-empty), which made a dead module look healthy —
+# exactly the failure mode this rework removes.
 diag_file="$tmpfolder/logs/susfs_diag.txt"
-if [ -n "$version" ] || [ -n "$susfs_features" ]; then
+kpm_warning=""
+live=0
+[ "$kpm_source" = "channel" ] && live=1
+[ "$kpm_source" = "dmesg" ] && live=1
+
+# A running KPM whose version differs from the one this module ships means a
+# stale copy embedded in the boot image is shadowing ours: the embedded KPM
+# is loaded at kernel init, long before /data/adb/ap/kpm/ is scanned at the
+# post-fs-data event, so the embedded copy always wins and module updates
+# appear to do nothing.
+if [ $live -eq 1 ] && [ -n "$version" ] && [ "${version#v}" != "$KPM_EXPECTED_VERSION" ]; then
+	kpm_warning="running KPM is v${version#v} but this module ships v${KPM_EXPECTED_VERSION}; remove the embedded KPM from the boot image (APatch -> KPM tab) or re-embed v${KPM_EXPECTED_VERSION}"
+fi
+
+if [ $live -eq 1 ]; then
 	touch $tmpfolder/logs/susfs_active
-	# Parse variant from dmesg cache instead of calling ksu_susfs again
-	susfs_variant=$(grep 'susfs_kpm: version=' "$dmesg_cache" | tail -1 | sed 's/.*variant=//;s/ .*//')
 	[ -z "$susfs_variant" ] && susfs_variant="GKI-APATCH"
 	{
 		echo "=== susfs4ksu/post-fs-data ==="
 		echo "timestamp: $(date)"
 		echo "status: ACTIVE"
+		echo "source: $kpm_source"
 		echo "version: $version"
 		echo "variant: $susfs_variant"
 		echo "features: $susfs_features"
-	} > "$diag_file" 2>&1
-elif [ $kpm_in_dmesg -eq 1 ]; then
-	# KPM is loaded (dmesg) but `ksu_susfs show` couldn't parse it.
-	# Still mark as active so the WebUI doesn't show "unsupported kernel".
-	touch $tmpfolder/logs/susfs_active
-	{
-		echo "=== susfs4ksu/post-fs-data ==="
-		echo "timestamp: $(date)"
-		echo "status: ACTIVE (dmesg only — show parse failed)"
-		echo "uid: $(id -u)"
-		echo "dmesg_susfs: $(grep -iE 'susfs|susfs_kpm' "$dmesg_cache" | head -5)"
+		[ -n "$kpm_warning" ] && echo "warning: $kpm_warning"
 	} > "$diag_file" 2>&1
 else
-	# KPM not found in dmesg at all — not loaded.
+	# No live KPM reading: report the truth instead of falling back to a
+	# builtin feature list that would keep every feature-gated block and the
+	# WebUI status badge looking normal.
 	rm -f $tmpfolder/logs/susfs_active
 	{
 		echo "=== susfs4ksu/post-fs-data ==="
 		echo "timestamp: $(date)"
-		echo "status: FAILED (KPM not in dmesg)"
+		echo "status: FAILED (KPM not reachable — no command-channel reply)"
+		echo "source: builtin-fallback (version $version is this module's, not a live reading)"
 		echo "uid: $(id -u)"
-		echo "hint: the KPM is not loaded — check that the boot image"
-		echo "hint: has susfs_kpm embedded and KernelPatch is active"
+		echo "dmesg_cache: $(wc -l < "$dmesg_cache" 2>/dev/null | tr -d ' ') susfs line(s)"
+		echo "hint: 1) check the KPM is loaded (APatch app -> KPM tab)"
+		echo "hint: 2) for a store copy, /data/adb/ap/kpm/susfs_kpm/susfs_kpm.kpm must exist"
+		echo "hint: 3) see $tmpfolder/logs/susfs.log for the script log"
 	} > "$diag_file" 2>&1
 fi
 

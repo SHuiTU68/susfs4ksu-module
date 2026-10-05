@@ -81,9 +81,19 @@ static int syscall_show(unsigned int cmd, char *out, size_t outlen)
 	snprintf(cmd_str, sizeof(cmd_str), "%X", cmd);
 	/* Ensure out is zeroed so we can detect "hook returned 0 but wrote nothing" */
 	out[0] = '\0';
+	/* The 5th argument carries the real rc: KernelPatch only honours
+	 * skip_origin for slots registered via hook_syscalln_override(), so with
+	 * an older KPM the syscall returns -ESRCH even though the reply below was
+	 * written.  0x7fffffff = "not published". */
+	int rc_out = 0x7fffffff;
+	errno = 0;
 	long rc = syscall(__NR_kcmp_channel, SUSFS_CMD_MAGIC,
-	                  cmd_str, out, (long)outlen);
-	if (rc == 0 && out[0] != '\0') {
+	                  cmd_str, out, (long)outlen, &rc_out);
+	/* These are read-only queries: if the KPM wrote a reply we trust it,
+	 * even when the return code is unavailable (legacy KPM).  Accepting the
+	 * buffer here is what stops `show enabled_features` from degenerating to
+	 * a single feature via the diag-file fallback. */
+	if (out[0] != '\0' && (rc_out == 0 || rc_out == 0x7fffffff)) {
 		/* Strip only TRAILING newlines — the enabled_features output is
 		 * multi-line (newline-separated CONFIG list).  The previous code
 		 * used strcspn(out, "\r\n") which truncated at the FIRST newline,
@@ -94,7 +104,8 @@ static int syscall_show(unsigned int cmd, char *out, size_t outlen)
 			out[--len] = '\0';
 		return 0;
 	}
-	/* rc == 0 but out empty → false success, fall through to fallbacks */
+	(void)rc;
+	/* No usable reply → fall through to the fallback layers */
 	return -1;
 }
 
@@ -129,23 +140,54 @@ static int diag_get_features(char *out, size_t outlen)
 	const char *diag_path = "/data/adb/ap/susfs4ksu/logs/susfs_diag.txt";
 	FILE *fp = fopen(diag_path, "r");
 	if (!fp) return -1;
+
 	char line[SUSFS_ENABLED_FEATURES_SIZE];
-	int found = -1;
+	size_t used = 0;
+	int in_list = 0;
+
+	out[0] = '\0';
+
 	while (fgets(line, sizeof(line), fp)) {
 		line[strcspn(line, "\r\n")] = '\0';
-		if (strncmp(line, "features:", 9) == 0) {
-			const char *val = line + 9;
-			while (*val == ' ' || *val == '\t') val++;
-			if (*val) {
-				strncpy(out, val, outlen - 1);
-				out[outlen - 1] = '\0';
-				found = 0;
-				break;
-			}
+		char *p = line;
+
+		if (!in_list) {
+			if (strncmp(p, "features:", 9) != 0)
+				continue;
+			p += 9;
+			while (*p == ' ' || *p == '\t') p++;
+			in_list = 1;
+			/* Fall through to copy whatever sits on the header line */
+		} else if (strncmp(p, "CONFIG_", 7) != 0) {
+			/* End of the list — the diag file continues with other
+			 * keys (variant:, warning:, ...) */
+			break;
 		}
+
+		/* Copy this entry (a comma- or newline-separated list is
+		 * normalised to one feature per line). */
+		for (; *p; p++) {
+			if (*p == ',') {
+				if (used && out[used - 1] != '\n' &&
+				    used + 1 < outlen)
+					out[used++] = '\n';
+				continue;
+			}
+			if (used + 1 >= outlen) break;
+			out[used++] = *p;
+		}
+		if (used && out[used - 1] != '\n' && used + 1 < outlen)
+			out[used++] = '\n';
+		out[used] = '\0';
 	}
+
 	fclose(fp);
-	return found;
+
+	/* Drop the trailing newline for consistency with the syscall reply */
+	if (used && out[used - 1] == '\n')
+		out[--used] = '\0';
+
+	return used ? 0 : -1;
 }
 
 /* Built-in static feature list — kept in sync with the KPM's show.c
@@ -170,7 +212,7 @@ static const char builtin_features[] =
     "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT\n";
 
 /* Built-in version — matches KPM's SUSFS_KPM_VERSION. */
-static const char builtin_version[] = "2.2.0";
+static const char builtin_version[] = "2.3.0";
 /* Built-in variant — matches KPM's SUSFS_KPM_VARIANT. */
 static const char builtin_variant[] = "GKI-APATCH";
 

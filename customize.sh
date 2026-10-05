@@ -1,17 +1,18 @@
 #!/bin/sh
 # susfs4ap-module customize.sh — APatch + KPM edition.
 #
-# This installer ships ONE artifact:
-#   tools/ksu_susfs_arm64 — userspace CLI that talks to the KPM via
-#   sc_kpm_control() (APatch supercall). Installed to /data/adb/ap/bin/.
+# This installer ships TWO artifacts:
+#   tools/ksu_susfs_arm64 — userspace CLI that talks to the KPM through the
+#   kcmp command channel (primary) or sc_kpm_control() (APatch supercall,
+#   fallback).  Installed to /data/adb/ap/bin/ as ksu_susfs_real + wrapper.
+#   susfs_kpm.kpm — the KernelPatch Module, deployed to
+#   /data/adb/ap/kpm/susfs_kpm/susfs_kpm.kpm so APatch loads it at the
+#   post-fs-data user event on the next boot (no boot-image surgery needed).
 #
-# The KPM itself (susfs_kpm.kpm) is NOT shipped here — the user bakes it
-# into the boot image, so APatch auto-loads it on every boot. This module
-# only installs the userspace tool and verifies the KPM is resident.
-#
-# The original susfs4ksu downloaded a generic binary from the cloud; that
-# binary uses the KernelSU reboot-magic syscall and is NOT compatible with
-# APatch. We therefore ship our own binary and skip the cloud update.
+# A KPM embedded in the boot image still takes precedence: it is loaded at
+# kernel init, long before the store is scanned.  post-fs-data.sh and
+# action.sh both warn when the running KPM's version differs from
+# module.prop:kpmVersion, which is the signature of that shadowing.
 PATH=/data/adb/ap/bin:/data/adb/ksu/bin:/data/data/com.termux/files/usr/bin:$PATH
 AP_BIN=/data/adb/ap/bin/apd
 DEST_BIN_DIR=/data/adb/ap/bin
@@ -82,6 +83,12 @@ ui_print "[-] Installing ksu_susfs userspace tool"
 chmod +x "${TMPDIR}/susfs/tools/ksu_susfs_arm64"
 cp ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${DEST_BIN_DIR}/ksu_susfs_real
 chmod 755 ${DEST_BIN_DIR}/ksu_susfs_real
+# Keep a pristine copy inside the module so action.sh can repair an install
+# whose binaries were clobbered (upstream's action.sh used to overwrite
+# ksu_susfs with the KSU universal binary — see action.sh).
+mkdir -p ${MODPATH}/bin
+cp -f ${TMPDIR}/susfs/tools/ksu_susfs_arm64 ${MODPATH}/bin/ksu_susfs_arm64
+chmod 755 ${MODPATH}/bin/ksu_susfs_arm64
 cat > ${DEST_BIN_DIR}/ksu_susfs <<'WRAPPER'
 #!/system/bin/sh
 # ksu_susfs wrapper — retries via APatch su when supercall is rejected.
@@ -114,40 +121,49 @@ chmod 755 ${DEST_BIN_DIR}/ksu_susfs
 # trusted-manager UID (APatch app, verified by APK signature).  A root shell
 # gets is_trusted_caller but NOT is_authed, so loading must happen at boot.
 #
-# If the KPM is already resident (the user baked it into the boot image, or
-# APatch loaded it from this directory on an earlier boot), we leave the
-# existing copy alone rather than creating a duplicate load.
-ui_print "[-] Checking susfs_kpm via dmesg (instant, no superkey needed)"
-if dmesg 2>/dev/null | grep -q "susfs_kpm: loaded"; then
-	ui_print "[-] susfs_kpm is already resident (detected via dmesg printk)"
-	ui_print "[-] Leaving the installed KPM store untouched"
-else
-	KPM_ID=susfs_kpm
-	KPM_DIR=/data/adb/ap/kpm/${KPM_ID}
-	# The CI zips susfs_kpm.kpm at the archive root.  Magisk-family installers
-	# extract the whole archive into $MODPATH, and this script additionally
-	# unzips it into $TMPDIR/susfs for the userspace tool — accept either.
-	KPM_SRC=""
-	for cand in "${MODPATH}/${KPM_ID}.kpm" "${TMPDIR}/susfs/${KPM_ID}.kpm"; do
-		[ -f "$cand" ] && KPM_SRC="$cand" && break
-	done
-	if [ -n "$KPM_SRC" ]; then
-		ui_print "[-] Installing KPM to ${KPM_DIR}/${KPM_ID}.kpm"
-		mkdir -p ${KPM_DIR}
-		# Keep an existing `disable` marker: the user may have turned the
-		# module off on purpose from the APatch app.
-		cp -f "$KPM_SRC" "${KPM_DIR}/${KPM_ID}.kpm"
-		chmod 644 "${KPM_DIR}/${KPM_ID}.kpm"
-		if [ -e "${KPM_DIR}/disable" ]; then
-			ui_print "[!] ${KPM_DIR}/disable exists — KPM stays disabled"
-		else
-			ui_print "[-] susfs_kpm will be loaded by APatch at the"
-			ui_print "    post-fs-data event on the next reboot"
-		fi
+# We ALWAYS deploy the file (idempotent), even when a KPM is currently
+# resident.  The previous revision skipped deployment when dmesg contained
+# "susfs_kpm: loaded" — which on this device was true whenever the KPM had
+# been embedded in the boot image, so the store stayed empty and every
+# module update silently kept running the *stale embedded* KPM.  Deploying
+# unconditionally makes the store authoritative once the embedded copy is
+# removed, and post-fs-data.sh warns when the running KPM's version differs
+# from the one shipped here.
+KPM_ID=susfs_kpm
+KPM_DIR=/data/adb/ap/kpm/${KPM_ID}
+KPM_VER=$(sed -n 's/^kpmVersion=//p' ${MODPATH}/module.prop 2>/dev/null | head -1)
+# The CI zips susfs_kpm.kpm at the archive root.  Magisk-family installers
+# extract the whole archive into $MODPATH, and this script additionally
+# unzips it into $TMPDIR/susfs for the userspace tool — accept either.
+KPM_SRC=""
+for cand in "${MODPATH}/${KPM_ID}.kpm" "${TMPDIR}/susfs/${KPM_ID}.kpm"; do
+	[ -f "$cand" ] && KPM_SRC="$cand" && break
+done
+if [ -n "$KPM_SRC" ]; then
+	ui_print "[-] Installing KPM${KPM_VER:+ v${KPM_VER}} to ${KPM_DIR}/${KPM_ID}.kpm"
+	mkdir -p ${KPM_DIR}
+	cp -f "$KPM_SRC" "${KPM_DIR}/${KPM_ID}.kpm"
+	chmod 644 "${KPM_DIR}/${KPM_ID}.kpm"
+	if [ -e "${KPM_DIR}/disable" ]; then
+		ui_print "[!] ${KPM_DIR}/disable exists — KPM stays disabled"
 	else
-		ui_print "[!] ${KPM_ID}.kpm missing from the zip"
-		ui_print "    Re-flash, or load the KPM manually from APatch's KPM tab"
+		ui_print "[-] susfs_kpm will be loaded by APatch at the"
+		ui_print "    post-fs-data event on the next reboot"
 	fi
+	# If the KPM is ALSO embedded in the boot image, the embedded copy wins
+	# (it is loaded at kernel init, before the store is scanned).  Detect and
+	# report it so the user isn't left wondering why an update "did nothing".
+	if dmesg 2>/dev/null | grep -q "susfs_kpm:"; then
+		embedded_ver=$(dmesg 2>/dev/null | grep 'susfs_kpm: version=' | tail -1 | sed 's/.*version=//;s/ .*//')
+		if [ -n "$embedded_ver" ]; then
+			ui_print "[!] A KPM is already loaded in this boot (v${embedded_ver})."
+			ui_print "[!] If it lives in the boot image it will shadow this copy —"
+			ui_print "[!] remove it via APatch -> KPM tab (or re-embed v${KPM_VER:-the new one})."
+		fi
+	fi
+else
+	ui_print "[!] ${KPM_ID}.kpm missing from the zip"
+	ui_print "    Re-flash, or load the KPM manually from APatch's KPM tab"
 fi
 
 # set permissions

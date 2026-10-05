@@ -323,6 +323,27 @@ static inline const char *get_supercall_key(void)
     return key_buf;
 }
 
+/* One-shot probe: is any KPM answering on the kcmp channel?
+ *
+ * Needed because -ESRCH is ambiguous: it is what we observe BOTH from an
+ * old KPM whose skip_origin was refused (the real kcmp runs, but the
+ * before-hook already performed the command and wrote the reply) AND from
+ * no KPM at all (the real kcmp runs and nothing is written).  Writing a
+ * reply is the discriminator.  Result is cached for the process lifetime. */
+static inline int kpm_channel_alive(void)
+{
+    static int alive = -1;
+    if (alive >= 0) return alive;
+
+    char probe[64];
+    probe[0] = '\0';
+    int rc_out = 0x7fffffff;
+    syscall(__NR_kcmp_channel, SUSFS_CMD_MAGIC, "555E1",
+            probe, (long)sizeof(probe), &rc_out);
+    alive = (probe[0] != '\0') ? 1 : 0;
+    return alive;
+}
+
 /* Issue a KPM control command.
  *
  * PRIMARY path: syscall command channel (hook on __NR_kcmp).
@@ -331,6 +352,14 @@ static inline const char *get_supercall_key(void)
  *   it via susfs_ctl0(), writes any response to arg2, and short-circuits
  *   the original syscall.  This bypasses the supercall is_authed gate
  *   entirely — no superkey needed, works for root shell (uid 0).
+ *
+ *   The 5th argument is an int* the KPM fills with the real return value.
+ *   KernelPatch only permits a before-hook to suppress the real syscall
+ *   (skip_origin) for slots registered through hook_syscalln_override();
+ *   with plain hook_syscalln() the kernel still ran the real
+ *   kcmp(pid1=<magic>, ...), which answers -ESRCH — so every command looked
+ *   like a failure even though the handler had run.  Reading the explicit
+ *   result pointer removes the dependency on that KernelPatch detail.
  *
  * FALLBACK path: SUPERCALL_KPM_CONTROL.
  *   Used only if the syscall channel returns -ENOSYS (KPM not loaded or
@@ -343,11 +372,37 @@ static inline const char *get_supercall_key(void)
 static inline long kpm_control(const char *ctl_args,
                                char *out_msg, long outlen)
 {
+    /* 0x7fffffff = "KPM did not publish a result" (legacy KPM / no KPM). */
+    const int kpm_no_result = 0x7fffffff;
     if (!ctl_args || !*ctl_args) return -EINVAL;
 
     /* Primary: syscall command channel via __NR_kcmp hook */
+    int rc_out = kpm_no_result;
+    errno = 0;
     long rc = syscall(__NR_kcmp_channel, SUSFS_CMD_MAGIC,
-                      ctl_args, out_msg, outlen);
+                      ctl_args, out_msg, outlen, &rc_out);
+
+    /* New KPM: explicit result pointer is authoritative. */
+    if (rc_out != kpm_no_result) return rc_out;
+
+    /* Old KPM: skip_origin was refused, so the real kcmp ran and we got
+     * -ESRCH — yet the before-hook still applied the command.  Only report
+     * success when a KPM is demonstrably answering on this channel. */
+    if (rc == -1 && errno == ESRCH && kpm_channel_alive()) {
+        static int warned = 0;
+        if (!warned) {
+            warned = 1;
+            fprintf(stderr,
+                    "[!] susfs_kpm: legacy kcmp channel detected "
+                    "(KernelPatch refused skip_origin).\n"
+                    "[!] Commands do execute, but their return codes are "
+                    "unavailable.\n"
+                    "[!] Update the KPM to v2.3.0+ (module release) and "
+                    "reload it.\n");
+        }
+        return 0;
+    }
+
     if (rc != -ENOSYS) return rc;
 
     /* Fallback: supercall (only works with is_authed) */

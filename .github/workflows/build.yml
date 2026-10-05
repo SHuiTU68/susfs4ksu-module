@@ -22,7 +22,22 @@ jobs:
           repository: bmax121/KernelPatch
           # Full 40-char SHA required: short SHAs trigger a branch/tag glob
           # in actions/checkout's fetch refspec and fail with exit code 1.
-          ref: 55c439fa4d9c945ceeb57a3610b8a9a988647cb5
+          #
+          # 2026-09-24 ("bypass Shadow Call Stack").  Pinned to the KernelPatch
+          # generation that the APatch app currently embeds, because the KPM's
+          # undefined symbols are resolved at LOAD time against the *runtime*
+          # KernelPatch: using a header that declares a symbol the device's
+          # KernelPatch does not export makes the whole KPM fail to load.
+          #
+          # It must be >= 2dc68c2 (2026-09-11, "syscall: one gated dispatcher
+          # hook instead of per-syscall hooks") — that commit introduced
+          # hook_syscalln_override() and the `allow_skip` gate in
+          # syscall_dispatch_before(), both of which susfs_kpm.c depends on:
+          # only a slot registered with allow_skip=1 may suppress the real
+          # syscall, and hook_syscalln() registers with allow_skip=0.
+          # (Before that commit, the pin was 55c439fa4d9c945ceeb57a3610b8a9a988647cb5
+          # from 2026-07-04, which predates the dispatcher rework entirely.)
+          ref: b51197aaba8f2272dd8a3e30c85698a29aa928c9
           path: KernelPatch
 
       - name: Install clang & lld for KPM cross-compile
