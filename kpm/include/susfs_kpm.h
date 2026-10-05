@@ -145,7 +145,7 @@ extern int (*susfs_printk)(const char *fmt, ...);
  * module's own KPM (see post-fs-data.sh), so bump this whenever the KPM is
  * rebuilt and shipped in a module release. */
 #define SUSFS_KPM_NAME    "susfs_kpm"
-#define SUSFS_KPM_VERSION "2.3.0"
+#define SUSFS_KPM_VERSION "2.3.1"
 #define SUSFS_KPM_VARIANT "GKI-APATCH"
 
 /* UID schemes for open_redirect (mirror upstream enum) */

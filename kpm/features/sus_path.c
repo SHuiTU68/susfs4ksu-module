@@ -286,7 +286,7 @@ int susfs_sus_path_init_hooks(void)
     }
 
     /* Hook openat — catches open(), fopen(), File.openInput(), etc. */
-    hook_err_t err = hook_syscalln(__NR_openat, 4, before_openat, 0, 0);
+    hook_err_t err = hook_syscalln_override(__NR_openat, 4, before_openat, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook openat failed: %d\n", err);
         rc = (int)err;
@@ -296,7 +296,7 @@ int susfs_sus_path_init_hooks(void)
     }
 
     /* Hook faccessat — catches access(), File.exists() */
-    err = hook_syscalln(__NR_faccessat, 3, before_faccessat, 0, 0);
+    err = hook_syscalln_override(__NR_faccessat, 3, before_faccessat, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook faccessat failed: %d\n", err);
         rc = (int)err;
@@ -306,7 +306,7 @@ int susfs_sus_path_init_hooks(void)
     }
 
     /* Hook newfstatat — catches stat(), File.stat(), File.length() */
-    err = hook_syscalln(__NR_newfstatat, 4, before_newfstatat, 0, 0);
+    err = hook_syscalln_override(__NR_newfstatat, 4, before_newfstatat, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook newfstatat failed: %d\n", err);
         rc = (int)err;
@@ -317,7 +317,7 @@ int susfs_sus_path_init_hooks(void)
 
     /* Hook openat2 — catches open() with RESOLVE_* flags (used by some
      * newer detectors that want to bypass path-based checks). */
-    err = hook_syscalln(__NR_openat2, 4, before_openat2, 0, 0);
+    err = hook_syscalln_override(__NR_openat2, 4, before_openat2, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook openat2 failed: %d\n", err);
         rc = (int)err;
@@ -327,7 +327,7 @@ int susfs_sus_path_init_hooks(void)
     }
 
     /* Hook faccessat2 — catches the newer access() variant (flags-aware). */
-    err = hook_syscalln(__NR_faccessat2, 4, before_faccessat2, 0, 0);
+    err = hook_syscalln_override(__NR_faccessat2, 4, before_faccessat2, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook faccessat2 failed: %d\n", err);
         rc = (int)err;
@@ -338,7 +338,7 @@ int susfs_sus_path_init_hooks(void)
 
     /* Hook statx — catches the modern stat() implementation and
      * File.getCanonicalPath()-style probes. */
-    err = hook_syscalln(__NR_statx, 5, before_statx, 0, 0);
+    err = hook_syscalln_override(__NR_statx, 5, before_statx, 0, 0);
     if (err != HOOK_NO_ERR) {
         logke("susfs_kpm: hook statx failed: %d\n", err);
         rc = (int)err;
