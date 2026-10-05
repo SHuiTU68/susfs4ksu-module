@@ -124,12 +124,19 @@ if dmesg 2>/dev/null | grep -q "susfs_kpm: loaded"; then
 else
 	KPM_ID=susfs_kpm
 	KPM_DIR=/data/adb/ap/kpm/${KPM_ID}
-	if [ -f "${MODPATH}/${KPM_ID}.kpm" ]; then
+	# The CI zips susfs_kpm.kpm at the archive root.  Magisk-family installers
+	# extract the whole archive into $MODPATH, and this script additionally
+	# unzips it into $TMPDIR/susfs for the userspace tool — accept either.
+	KPM_SRC=""
+	for cand in "${MODPATH}/${KPM_ID}.kpm" "${TMPDIR}/susfs/${KPM_ID}.kpm"; do
+		[ -f "$cand" ] && KPM_SRC="$cand" && break
+	done
+	if [ -n "$KPM_SRC" ]; then
 		ui_print "[-] Installing KPM to ${KPM_DIR}/${KPM_ID}.kpm"
 		mkdir -p ${KPM_DIR}
 		# Keep an existing `disable` marker: the user may have turned the
 		# module off on purpose from the APatch app.
-		cp -f "${MODPATH}/${KPM_ID}.kpm" "${KPM_DIR}/${KPM_ID}.kpm"
+		cp -f "$KPM_SRC" "${KPM_DIR}/${KPM_ID}.kpm"
 		chmod 644 "${KPM_DIR}/${KPM_ID}.kpm"
 		if [ -e "${KPM_DIR}/disable" ]; then
 			ui_print "[!] ${KPM_DIR}/disable exists — KPM stays disabled"
