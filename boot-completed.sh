@@ -425,7 +425,7 @@ fi
 # Starting in SUSFS version v1.5.8, it needs to set the sdcard and android data root paths
 # This will start the sus_path process. Without this check, sus_path will not work
 count=0
-max_attempts=60
+max_attempts=100
 until [ -d "/sdcard/Android/data" ] || [ $count -ge $max_attempts ]; do
 	sleep 1
 	count=$((count + 1))

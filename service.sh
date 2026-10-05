@@ -191,12 +191,6 @@ contains_reset_prop "vendor.boot.bootmode" "recovery" "unknown"
 # fake encryption status
 check_reset_prop "ro.crypto.state" "encrypted"
 
-# Set vbmeta verifiedBootHash from file (if present and not empty)
-HASH_FILE="/data/adb/VerifiedBootHash/VerifiedBootHash.txt"
-if [ -s "$HASH_FILE" ]; then
-    resetprop -v -n ro.boot.vbmeta.digest "$(cat $HASH_FILE | tr '[:upper:]' '[:lower:]')"
-fi
-
 # Add open redirect paths (service.sh)
 # Performance: split fields via shell parameter expansion instead of
 # `echo | awk` (saves 3-4 forks per line).
