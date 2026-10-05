@@ -54,7 +54,15 @@ int susfs_show_enabled_features(char *out, int outlen)
         "CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING\n"
         "CONFIG_KSU_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS\n"
         "CONFIG_KSU_SUSFS_TRY_UMOUNT\n"
-        "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT\n";
+        "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT\n"
+        /* These two must stay advertised: the dmesg status line and the
+         * userspace builtin fallback list (features/show.c is one half of the
+         * same table) both already list them, and the upstream WebUI
+         * (status_auto_default_mount / status_auto_bind_mount) greps for them.
+         * Omitting them here made the WebUI status page show "Disabled" for
+         * two features that the KPM's hybrid post-mount.sh path does handle. */
+        "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT\n"
+        "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT\n";
     int i = 0;
     while (features[i] && i < outlen - 1) { out[i] = features[i]; i++; }
     out[i] = '\0';

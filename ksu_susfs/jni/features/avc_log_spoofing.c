@@ -7,11 +7,10 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include <kpm_call.h>
 #include "avc_log_spoofing.h"
-
-#define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x60010
 
 void enable_avc_log_spoofing_print_help(void){
 	log("    enable_avc_log_spoofing <0|1>\n");

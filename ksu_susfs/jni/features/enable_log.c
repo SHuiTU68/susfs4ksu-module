@@ -7,11 +7,10 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include <kpm_call.h>
 #include "enable_log.h"
-
-#define CMD_SUSFS_ENABLE_LOG 0x555a0
 
 void enable_log_print_help(void){
 	log("    enable_log <0|1>\n");

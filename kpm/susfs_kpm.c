@@ -442,6 +442,24 @@ static long susfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
                                        (int)parse_long(ARG(3), 0));
     case CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU:
         return susfs_set_hide_sus_mnts((int)parse_long(ARG(1), 0));
+    case CMD_SUSFS_UMOUNT_FOR_ZYGOTE_ISO_SERVICE:
+        /* [deprecated] upstream dropped the zygote-isolation umount when it
+         * reworked try_umount.  Kept as an advisory no-op so scripts that
+         * still poke it succeed instead of aborting. */
+        return 0;
+    case CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH:
+    case CMD_SUSFS_SET_SDCARD_ROOT_PATH:
+        /* [deprecated] upstream removed the root-path configuration knobs.
+         * This KPM hooks path_openat directly and never needed them. */
+        return 0;
+    case CMD_SUSFS_SUS_SU:
+    case CMD_SUSFS_SHOW_SUS_SU_WORKING_MODE:
+    case CMD_SUSFS_IS_SUS_SU_READY:
+        /* [deprecated] sus_su was removed in susfs v2.0; there is no
+         * kernel-side sus_su to report on.  Report "not supported" (rather
+         * than -ENOSYS, which userspace reads as "KPM not loaded") so
+         * callers fall back to their own sus_su handling. */
+        return -EOPNOTSUPP;
     case CMD_SUSFS_ADD_TRY_UMOUNT:
         if (argc < 2) return -EINVAL;
         return susfs_add_try_umount(ARG(1), (int)parse_long(ARG(2), 0));
@@ -465,10 +483,26 @@ static long susfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
          * field carries the spoof flags (defaults to 0).  Userspace
          * resolves "default" sentinels / current stat values before
          * sending, so the KPM just stores them as-is.  is_static is set
-         * only for the _statically variant. */
+         * only for the _statically variant.
+         *
+         * UPDATE is a different operation (upstream
+         * susfs_update_sus_kstat): the path was bind-mounted/overlaid since
+         * add_sus_kstat, so its inode changed — the stored spoof values are
+         * kept and only target_ino/target_dev are swapped.  It fails with
+         * -ENOENT if the path was never added. */
         if (argc < 15) return -EINVAL;
         int is_static = (cmd == CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY) ? 1 : 0;
         int kflags = (argc >= 16) ? (int)parse_long(ARG(15), 0) : 0;
+        if (cmd == CMD_SUSFS_UPDATE_SUS_KSTAT) {
+            return susfs_update_sus_kstat(
+                ARG(1), parse_ulong(ARG(2), 0), parse_ulong(ARG(3), 0),
+                parse_ulong(ARG(4), 0), (unsigned int)parse_ulong(ARG(5), 0),
+                (long long)parse_long(ARG(6), 0), parse_long(ARG(7), 0),
+                parse_ulong(ARG(8), 0), parse_long(ARG(9), 0),
+                parse_ulong(ARG(10), 0), parse_long(ARG(11), 0),
+                parse_ulong(ARG(12), 0), (long long)parse_long(ARG(13), 0),
+                parse_long(ARG(14), 0), kflags);
+        }
         return susfs_add_sus_kstat(
             ARG(1),                              /* path */
             parse_ulong(ARG(2), 0),              /* target_ino */

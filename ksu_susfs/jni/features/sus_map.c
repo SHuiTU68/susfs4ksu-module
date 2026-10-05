@@ -7,11 +7,10 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include <kpm_call.h>
 #include "sus_map.h"
-
-#define CMD_SUSFS_ADD_SUS_MAP 0x60020
 
 void sus_map_print_help(void){
 	log("    add_sus_map </path/to/actual/library>\n");

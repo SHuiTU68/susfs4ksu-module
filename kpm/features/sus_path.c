@@ -51,6 +51,19 @@
 #ifndef __NR_newfstatat
 #define __NR_newfstatat  79
 #endif
+/* Newer syscall entry points that modern Android file-existence / stat
+ * detectors use.  Real susfs intercepts at the VFS layer so it catches all
+ * of these for free; a syscall-level KPM must hook each one explicitly or
+ * a detector using statx()/faccessat2()/openat2() would see the file. */
+#ifndef __NR_openat2
+#define __NR_openat2     437
+#endif
+#ifndef __NR_faccessat2
+#define __NR_faccessat2  439
+#endif
+#ifndef __NR_statx
+#define __NR_statx       291
+#endif
 
 struct sus_path_entry {
     struct list_head list;
@@ -75,6 +88,9 @@ static void *do_filp_open_addr;
 static int openat_hooked = 0;
 static int faccessat_hooked = 0;
 static int newfstatat_hooked = 0;
+static int openat2_hooked = 0;
+static int faccessat2_hooked = 0;
+static int statx_hooked = 0;
 
 static int path_matches(const char *target, int target_len,
                         const char *entry, int entry_len)
@@ -185,6 +201,46 @@ static void before_newfstatat(hook_fargs4_t *args, void *udata)
     (void)udata;
 }
 
+/* openat2(int dfd, const char *pathname, struct open_how *how, size_t size) */
+static void before_openat2(hook_fargs4_t *args, void *udata)
+{
+    if (sus_path_count == 0) return;
+    if (!caller_should_hide()) return;
+    const char __user *user_path = (const char __user *)syscall_argn(args, 1);
+    if (sus_path_should_hide(user_path)) {
+        args->skip_origin = 1;
+        args->ret = (uint64_t)(long)-ENOENT;
+    }
+    (void)udata;
+}
+
+/* faccessat2(int dfd, const char *pathname, int mode, int flags) */
+static void before_faccessat2(hook_fargs4_t *args, void *udata)
+{
+    if (sus_path_count == 0) return;
+    if (!caller_should_hide()) return;
+    const char __user *user_path = (const char __user *)syscall_argn(args, 1);
+    if (sus_path_should_hide(user_path)) {
+        args->skip_origin = 1;
+        args->ret = (uint64_t)(long)-ENOENT;
+    }
+    (void)udata;
+}
+
+/* statx(int dfd, const char *pathname, int flags, unsigned mask,
+ *       struct statx *buffer) */
+static void before_statx(hook_fargs5_t *args, void *udata)
+{
+    if (sus_path_count == 0) return;
+    if (!caller_should_hide()) return;
+    const char __user *user_path = (const char __user *)syscall_argn(args, 1);
+    if (sus_path_should_hide(user_path)) {
+        args->skip_origin = 1;
+        args->ret = (uint64_t)(long)-ENOENT;
+    }
+    (void)udata;
+}
+
 int susfs_add_sus_path(const char *path, int is_loop)
 {
     if (!path || !*path) return -EINVAL;
@@ -259,11 +315,45 @@ int susfs_sus_path_init_hooks(void)
         logki("susfs_kpm: hooked newfstatat syscall (before)\n");
     }
 
+    /* Hook openat2 — catches open() with RESOLVE_* flags (used by some
+     * newer detectors that want to bypass path-based checks). */
+    err = hook_syscalln(__NR_openat2, 4, before_openat2, 0, 0);
+    if (err != HOOK_NO_ERR) {
+        logke("susfs_kpm: hook openat2 failed: %d\n", err);
+        rc = (int)err;
+    } else {
+        openat2_hooked = 1;
+        logki("susfs_kpm: hooked openat2 syscall (before)\n");
+    }
+
+    /* Hook faccessat2 — catches the newer access() variant (flags-aware). */
+    err = hook_syscalln(__NR_faccessat2, 4, before_faccessat2, 0, 0);
+    if (err != HOOK_NO_ERR) {
+        logke("susfs_kpm: hook faccessat2 failed: %d\n", err);
+        rc = (int)err;
+    } else {
+        faccessat2_hooked = 1;
+        logki("susfs_kpm: hooked faccessat2 syscall (before)\n");
+    }
+
+    /* Hook statx — catches the modern stat() implementation and
+     * File.getCanonicalPath()-style probes. */
+    err = hook_syscalln(__NR_statx, 5, before_statx, 0, 0);
+    if (err != HOOK_NO_ERR) {
+        logke("susfs_kpm: hook statx failed: %d\n", err);
+        rc = (int)err;
+    } else {
+        statx_hooked = 1;
+        logki("susfs_kpm: hooked statx syscall (before)\n");
+    }
+
     /* Emit to dmesg so userspace can verify the hooks are active. */
     if (susfs_printk) {
         susfs_printk("susfs_kpm: sus_path syscalls hooked "
-                     "(openat=%d faccessat=%d newfstatat=%d)\n",
-                     openat_hooked, faccessat_hooked, newfstatat_hooked);
+                     "(openat=%d faccessat=%d newfstatat=%d "
+                     "openat2=%d faccessat2=%d statx=%d)\n",
+                     openat_hooked, faccessat_hooked, newfstatat_hooked,
+                     openat2_hooked, faccessat2_hooked, statx_hooked);
     }
 
     return rc;
@@ -282,6 +372,18 @@ void susfs_sus_path_cleanup(void)
     if (newfstatat_hooked) {
         unhook_syscalln(__NR_newfstatat, before_newfstatat, 0);
         newfstatat_hooked = 0;
+    }
+    if (openat2_hooked) {
+        unhook_syscalln(__NR_openat2, before_openat2, 0);
+        openat2_hooked = 0;
+    }
+    if (faccessat2_hooked) {
+        unhook_syscalln(__NR_faccessat2, before_faccessat2, 0);
+        faccessat2_hooked = 0;
+    }
+    if (statx_hooked) {
+        unhook_syscalln(__NR_statx, before_statx, 0);
+        statx_hooked = 0;
     }
     path_openat_addr = 0;
     do_filp_open_addr = 0;

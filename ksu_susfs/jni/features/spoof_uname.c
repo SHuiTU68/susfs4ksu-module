@@ -7,11 +7,10 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include <kpm_call.h>
 #include "spoof_uname.h"
-
-#define CMD_SUSFS_SET_UNAME 0x55590
 
 #ifndef __NEW_UTS_LEN
 #define __NEW_UTS_LEN 64

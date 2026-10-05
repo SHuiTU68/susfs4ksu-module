@@ -99,24 +99,48 @@ exit $rc
 WRAPPER
 chmod 755 ${DEST_BIN_DIR}/ksu_susfs
 
-# ---- KPM residency check (advisory only) ----
-# The KPM is baked into the boot image by the user and auto-loaded by
-# KernelPatch at boot via the extra_item mechanism — this module does NOT
-# install or load it.
+# ---- Install the KPM into APatch's persistent KPM store ----
+# APatch loads KPMs from /data/adb/ap/kpm/<id>/<id>.kpm at the
+# `post-fs-data: before` user event (see KernelPatch
+# kernel/patch/android/userd.c:load_ap_kpm_modules(), called from
+# kernel/patch/common/user_event.c).  A `disable` marker file inside the
+# module directory skips it.  Writing the file here is byte-for-byte what the
+# APatch app's KPM tab -> "Install" action does, and it means the KPM no
+# longer has to be baked into the boot image as an extra item.
 #
-# IMPORTANT: we must NOT call `ksu_susfs show version` here!  The superkey
-# extraction (kptools / boot partition scan) is slow (can take 10+ seconds)
-# and will hang the module install UI.  Instead we check dmesg for the
-# KPM's init printk line, which is instant and safe.
+# We deliberately do NOT try to load it from the installer:
+# SUPERCALL_KPM_LOAD sits behind `if (!is_authed) return -EPERM;`.  is_authed
+# is granted only by (a) a matching preset superkey, or (b) being the
+# trusted-manager UID (APatch app, verified by APK signature).  A root shell
+# gets is_trusted_caller but NOT is_authed, so loading must happen at boot.
 #
-# The authoritative status is computed after boot by post-fs-data.sh (which
-# sets susfs_active) and reflected in the WebUI by boot-completed.sh.
+# If the KPM is already resident (the user baked it into the boot image, or
+# APatch loaded it from this directory on an earlier boot), we leave the
+# existing copy alone rather than creating a duplicate load.
 ui_print "[-] Checking susfs_kpm via dmesg (instant, no superkey needed)"
 if dmesg 2>/dev/null | grep -q "susfs_kpm: loaded"; then
-	ui_print "[-] susfs_kpm is loaded (detected via dmesg printk)"
+	ui_print "[-] susfs_kpm is already resident (detected via dmesg printk)"
+	ui_print "[-] Leaving the installed KPM store untouched"
 else
-	ui_print "[-] susfs_kpm not found in dmesg — reboot to activate if just patched"
-	ui_print "[-] Status will be shown in WebUI after boot"
+	KPM_ID=susfs_kpm
+	KPM_DIR=/data/adb/ap/kpm/${KPM_ID}
+	if [ -f "${MODPATH}/${KPM_ID}.kpm" ]; then
+		ui_print "[-] Installing KPM to ${KPM_DIR}/${KPM_ID}.kpm"
+		mkdir -p ${KPM_DIR}
+		# Keep an existing `disable` marker: the user may have turned the
+		# module off on purpose from the APatch app.
+		cp -f "${MODPATH}/${KPM_ID}.kpm" "${KPM_DIR}/${KPM_ID}.kpm"
+		chmod 644 "${KPM_DIR}/${KPM_ID}.kpm"
+		if [ -e "${KPM_DIR}/disable" ]; then
+			ui_print "[!] ${KPM_DIR}/disable exists — KPM stays disabled"
+		else
+			ui_print "[-] susfs_kpm will be loaded by APatch at the"
+			ui_print "    post-fs-data event on the next reboot"
+		fi
+	else
+		ui_print "[!] ${KPM_ID}.kpm missing from the zip"
+		ui_print "    Re-flash, or load the KPM manually from APatch's KPM tab"
+	fi
 fi
 
 # set permissions

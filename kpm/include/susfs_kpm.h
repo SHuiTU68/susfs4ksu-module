@@ -64,25 +64,55 @@ extern void (*susfs__raw_spin_unlock)(void *);
  * detect the KPM via `dmesg | grep susfs_kpm`. */
 extern int (*susfs_printk)(const char *fmt, ...);
 
-/* Command codes — kept identical to upstream susfs so ksu_susfs CLI stays familiar */
-#define CMD_SUSFS_ADD_SUS_PATH              0x55550
-#define CMD_SUSFS_ADD_SUS_PATH_LOOP         0x55553
-#define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU  0x55561
-#define CMD_SUSFS_ADD_TRY_UMOUNT            0x55562
-#define CMD_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT 0x55563
-#define CMD_SUSFS_ADD_SUS_MOUNT             0x55564
-#define CMD_SUSFS_ADD_SUS_KSTAT             0x55570
-#define CMD_SUSFS_UPDATE_SUS_KSTAT          0x55571
-#define CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY  0x55572
-#define CMD_SUSFS_SET_UNAME                 0x55590
-#define CMD_SUSFS_ENABLE_LOG                0x555a0
-#define CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG 0x555b0
-#define CMD_SUSFS_ADD_OPEN_REDIRECT         0x555c0
-#define CMD_SUSFS_SHOW_VERSION              0x555e1
-#define CMD_SUSFS_SHOW_ENABLED_FEATURES     0x555e2
-#define CMD_SUSFS_SHOW_VARIANT              0x555e3
-#define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING   0x60010
-#define CMD_SUSFS_ADD_SUS_MAP               0x60020
+/* ===== Command codes =====
+ *
+ * This table is a byte-for-byte mirror of the authoritative susfs v2.3.0
+ * table in  luyanci/susfs4oki  kernel_patches/include/linux/susfs_def.h
+ * (the reference implementation this KPM reimplements).  Keeping the exact
+ * numeric values means:
+ *   - a stock ksu_susfs CLI built for real susfs addresses the same
+ *     features when its command channel is pointed at this KPM, and
+ *   - the KPM's wire protocol can be diffed against susfs_def.h by eye.
+ *
+ * The userspace half of this module keeps the identical table in
+ * ksu_susfs/jni/includes/susfs_cmds.h — change BOTH if a value ever moves.
+ *
+ * NOTE: an earlier APatch KPM revision had ADD_TRY_UMOUNT=0x55562 and
+ * ADD_SUS_MOUNT=0x55564.  Those values are wrong: in real susfs 0x55562 is
+ * CMD_SUSFS_UMOUNT_FOR_ZYGOTE_ISO_SERVICE and 0x55564 is unassigned.  Both
+ * were corrected here (and in the CLI) to the values below. */
+#define CMD_SUSFS_ADD_SUS_PATH                    0x55550
+#define CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH      0x55551 /* [deprecated] */
+#define CMD_SUSFS_SET_SDCARD_ROOT_PATH            0x55552 /* [deprecated] */
+#define CMD_SUSFS_ADD_SUS_PATH_LOOP               0x55553
+#define CMD_SUSFS_ADD_SUS_MOUNT                   0x55560 /* [deprecated] */
+#define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS  0x55561
+/* Legacy alias kept so older in-tree code (and out-of-tree callers) still
+ * compiles; the canonical spelling is ..._NON_SU_PROCS. */
+#define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU        CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
+#define CMD_SUSFS_UMOUNT_FOR_ZYGOTE_ISO_SERVICE   0x55562 /* [deprecated] */
+#define CMD_SUSFS_ADD_SUS_KSTAT                   0x55570
+#define CMD_SUSFS_UPDATE_SUS_KSTAT                0x55571
+#define CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY        0x55572
+#define CMD_SUSFS_ADD_TRY_UMOUNT                  0x55580 /* [deprecated] */
+#define CMD_SUSFS_SET_UNAME                       0x55590
+#define CMD_SUSFS_ENABLE_LOG                      0x555a0
+#define CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG       0x555b0
+#define CMD_SUSFS_ADD_OPEN_REDIRECT               0x555c0
+#define CMD_SUSFS_SHOW_VERSION                    0x555e1
+#define CMD_SUSFS_SHOW_ENABLED_FEATURES           0x555e2
+#define CMD_SUSFS_SHOW_VARIANT                    0x555e3
+#define CMD_SUSFS_SHOW_SUS_SU_WORKING_MODE        0x555e4 /* [deprecated] */
+#define CMD_SUSFS_IS_SUS_SU_READY                 0x555f0 /* [deprecated] */
+#define CMD_SUSFS_SUS_SU                          0x60000 /* [deprecated] */
+#define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING         0x60010
+#define CMD_SUSFS_ADD_SUS_MAP                     0x60020
+/* KPM-only extension — NOT part of stock susfs (0x55563 is an unused hole
+ * in susfs_def.h, so it cannot collide with a future stock command that
+ * stays below 0x55570).  Tells the KPM to mark the bind mounts it tracks
+ * for the userspace half to detach; stock susfs does this purely in
+ * post-fs-data.sh by walking /proc/mounts. */
+#define CMD_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT 0x55563 /* KPM-only */
 
 #define SUSFS_MAX_LEN_PATHNAME              256
 #define SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE 8192
@@ -152,6 +182,16 @@ int susfs_add_sus_kstat(const char *path, unsigned long target_ino,
                         long mtime_sec, unsigned long mtime_nsec,
                         long ctime_sec, unsigned long ctime_nsec,
                         long long blocks, long blksize, int flags, int is_static);
+/* UPDATE_SUS_KSTAT: same wire format, but the entry must already exist (it is
+ * matched by path) and only the match key (target ino/dev) is swapped, exactly
+ * like upstream's susfs_update_sus_kstat(). */
+int susfs_update_sus_kstat(const char *path, unsigned long target_ino,
+                           unsigned long spoofed_ino, unsigned long spoofed_dev,
+                           unsigned int spoofed_nlink, long long spoofed_size,
+                           long atime_sec, unsigned long atime_nsec,
+                           long mtime_sec, unsigned long mtime_nsec,
+                           long ctime_sec, unsigned long ctime_nsec,
+                           long long blocks, long blksize, int flags);
 void susfs_sus_kstat_cleanup(void);
 int susfs_sus_kstat_init_hooks(void);
 

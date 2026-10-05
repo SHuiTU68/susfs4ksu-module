@@ -6,13 +6,10 @@
 #include <errno.h>
 #include <limits.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include <kpm_call.h>
 #include "sus_kstat.h"
-
-#define CMD_SUSFS_ADD_SUS_KSTAT 0x55570
-#define CMD_SUSFS_UPDATE_SUS_KSTAT 0x55571
-#define CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY 0x55572
 
 #define KSTAT_SPOOF_INO (1 << 0)
 #define KSTAT_SPOOF_DEV (1 << 1)

@@ -8,11 +8,10 @@
 #include <sys/reboot.h>
 #include <sys/syscall.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include <kpm_call.h>
 #include "open_redirect.h"
-
-#define CMD_SUSFS_ADD_OPEN_REDIRECT 0x555c0
 
 enum UID_SCHEME {
 	UID_NON_APP_PROC = 0,

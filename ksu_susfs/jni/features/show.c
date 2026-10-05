@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <sys/syscall.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include "show.h"
 
@@ -51,9 +52,6 @@
 #define SUSFS_CMD_MAGIC     0x5355534653595343ULL /* "SUSFSYSC" */
 
 /* CMD codes from susfs_kpm.h */
-#define CMD_SUSFS_SHOW_VERSION          0x555e1
-#define CMD_SUSFS_SHOW_ENABLED_FEATURES 0x555e2
-#define CMD_SUSFS_SHOW_VARIANT          0x555e3
 
 void show_print_help(void){
 	log("    show <version|enabled_features|variant>\n");

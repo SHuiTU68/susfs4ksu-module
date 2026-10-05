@@ -7,11 +7,10 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include <kpm_call.h>
 #include "spoof_cmdline_or_bootconfig.h"
-
-#define CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG 0x555b0
 
 #define SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE 8192
 

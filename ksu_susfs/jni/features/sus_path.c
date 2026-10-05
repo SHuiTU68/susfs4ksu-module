@@ -7,12 +7,10 @@
 #include <errno.h>
 #include <limits.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include <kpm_call.h>
 #include "sus_path.h"
-
-#define CMD_SUSFS_ADD_SUS_PATH 0x55550
-#define CMD_SUSFS_ADD_SUS_PATH_LOOP 0x55553
 
 void sus_path_print_help(void){
 	log("    add_sus_path </path/of/file_or_directory>\n");

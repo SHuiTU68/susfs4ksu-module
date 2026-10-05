@@ -7,14 +7,10 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <susfs_defs.h>
+#include <susfs_cmds.h>
 #include <susfs_utils.h>
 #include <kpm_call.h>
 #include "sus_mount.h"
-
-#define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 0x55561
-#define CMD_SUSFS_ADD_TRY_UMOUNT 0x55562
-#define CMD_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT 0x55563
-#define CMD_SUSFS_ADD_SUS_MOUNT 0x55564
 
 void sus_mount_print_help(void){
 	log("    hide_sus_mnts_for_non_su_procs <0|1>\n");
