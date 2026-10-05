@@ -59,9 +59,6 @@
 
   <!-- Settings -->
   <string id="susfs_log_label">Логи SUSFS</string>
-  <string id="sus_su_1_label">SUS SU в режиме 1</string>
-  <string id="sus_su_label">SUS SU</string>
-  <string id="sus_su_boot_label">SUS SU при загрузке</string>
   <string id="auto_hide_label">Настройки автоматического скрытия</string>
   <string id="default_mounts_label">Автоскрытие default mounts</string>
   <string id="bind_mounts_label">Автоскрытие bind mounts</string>
@@ -69,9 +66,6 @@
   <string id="auto_try_umount_label">Автоматическое размонтирование (в пользовательском пространстве)</string>
   <string id="skip_legit_mounts_label">Пропустить легитимные монтирования</string>
   <string id="hide_sus_mnts_for_all_or_non_su_procs_label">Скрыть sus_mounts от всех/non-su процессов</string>
-  <string id="turn_off_after_boot_completed_label">Выключить после boot-completed</string>
-  <string id="zygote_try_umount_label">Пробовать размонтировать для системного процесса zygote</string>
-  <string id="umount_for_zygote_iso_service_label">Пробовать размонтировать для изолированного сервиса zygote</string>
   <string id="kernel_uname_label">Uname ядра</string>
   <string id="spoof_kernel_version_label">Подмена версии ядра</string>
   <string id="spoofed_kernel_version_label">Измененная версия ядра</string>

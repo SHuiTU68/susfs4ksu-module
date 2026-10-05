@@ -59,9 +59,6 @@
 
   <!-- Settings -->
   <string id="susfs_log_label">Registri SUSFS</string>
-  <string id="sus_su_1_label">SUS SU è in Modalità 1</string>
-  <string id="sus_su_label">SUS SU</string>
-  <string id="sus_su_boot_label">SUS SU all\'avvio</string>
   <string id="auto_hide_label">auto nascondimento impostazioni </string>
   <string id="default_mounts_label">auto nascondimento montaggi predefiniti</string>
   <string id="bind_mounts_label">auto nascondimento montaggi bind</string>
@@ -69,9 +66,6 @@
   <string id="auto_try_umount_label">try umount automatico (spazio utente)</string>
   <string id="skip_legit_mounts_label">Salta Mount Legittimi</string>
   <string id="hide_sus_mnts_for_all_or_non_su_procs_label">Nascondi sus_mounts per tutti i processi</string>
-  <string id="turn_off_after_boot_completed_label">Spegni dopo il completamento dell'avvio</string>
-  <string id="zygote_try_umount_label">try umount per processo di sistema zigote</string>
-  <string id="umount_for_zygote_iso_service_label">try umount per servizio isolamento zygote</string>
   <string id="kernel_uname_label">Nome Kernel</string>
   <string id="spoof_kernel_version_label">Falsifica Versione Kernel</string>
   <string id="spoofed_kernel_version_label">Versione Kernel Falsificata</string>

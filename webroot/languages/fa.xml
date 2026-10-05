@@ -59,9 +59,6 @@
 
   <!-- Settings -->
   <string id="susfs_log_label">گزارشات SUSFS</string>
-  <string id="sus_su_1_label">SUS SU در حالت ۱ است</string>
-  <string id="sus_su_label">SUS SU</string>
-  <string id="sus_su_boot_label">SUS SU هنگام راه‌اندازی</string>
   <string id="auto_hide_label">تنظیمات پنهان سازی خودکار</string>
   <string id="default_mounts_label">پنهان سازی خودکار پیوست های پیش فرض</string>
   <string id="bind_mounts_label">پنهان سازی خودکار پیوست‌های پیوندی</string>
@@ -69,9 +66,6 @@
   <string id="auto_try_umount_label">جدا سازی خودکار (فضای کاربری)</string>
   <string id="skip_legit_mounts_label">رد شدن از پیوست های معتبر</string>
   <string id="hide_sus_mnts_for_all_or_non_su_procs_label">پنهان‌سازی پیوست های SUS برای همه‌ی فرآیندها یا فرآیندهای غیر su</string>
-  <string id="turn_off_after_boot_completed_label">خاموش شدن پس از کامل شدن بوت</string>
-  <string id="zygote_try_umount_label">جداسازی فرایند سیستمی zygote</string>
-  <string id="umount_for_zygote_iso_service_label">جداسازی برای سرویس ایزوله سازی zygote</string>
   <string id="kernel_uname_label">اطلاعات شناسایی کرنل</string>
   <string id="spoof_kernel_version_label">جعل سازی نسخه کرنل</string>
   <string id="spoofed_kernel_version_label">نسخه کرنل جعل شده</string>

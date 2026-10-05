@@ -59,9 +59,6 @@
 
   <!-- Settings -->
   <string id="susfs_log_label">SUSFS 로그</string>
-  <string id="sus_su_1_label">SUS SU가 모드 1로 설정됨</string>
-  <string id="sus_su_label">SUS SU</string>
-  <string id="sus_su_boot_label">부팅 시 SUS SU</string>
   <string id="auto_hide_label">자동 숨김 설정</string>
   <string id="default_mounts_label">기본 마운트 자동 숨김</string>
   <string id="bind_mounts_label">바인드 마운트 자동 숨김</string>
@@ -69,9 +66,6 @@
   <string id="auto_try_umount_label">자동 언마운트 시도 (유저스페이스)</string>
   <string id="skip_legit_mounts_label">정상 마운트 건너뛰기</string>
   <string id="hide_sus_mnts_for_all_or_non_su_procs_label">모든/비-su 프로세스에 대해 sus_mounts 숨기기</string>
-  <string id="turn_off_after_boot_completed_label">부팅 완료 후 끄기</string>
-  <string id="zygote_try_umount_label">zygote 시스템 프로세스에 대해 언마운트 시도</string>
-  <string id="umount_for_zygote_iso_service_label">zygote 격리 서비스에 대해 언마운트 시도</string>
   <string id="kernel_uname_label">커널 Uname</string>
   <string id="spoof_kernel_version_label">커널 버전 스푸핑</string>
   <string id="spoofed_kernel_version_label">스푸핑된 커널 버전</string>

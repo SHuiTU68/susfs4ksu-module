@@ -59,9 +59,6 @@
 
   <!-- Settings -->
   <string id="susfs_log_label">SUSFS Günlükleri</string>
-  <string id="sus_su_1_label">SUS SU Mod 1\'de</string>
-  <string id="sus_su_label">SUS SU</string>
-  <string id="sus_su_boot_label">Başlangıçta SUS SU</string>
   <string id="auto_hide_label">Otomatik Gizleme Ayarları</string>
   <string id="default_mounts_label">Varsayılan Bağlantıları Otomatik Gizle</string>
   <string id="bind_mounts_label">Bağlantı Bağlantılarını Otomatik Gizle</string>
@@ -69,9 +66,6 @@
   <string id="auto_try_umount_label">auto try umount (userspace)</string>
   <string id="skip_legit_mounts_label">Skip Legit Mounts</string>
   <string id="hide_sus_mnts_for_all_or_non_su_procs_label">Hide sus_mounts for all/non-su processes</string>
-  <string id="turn_off_after_boot_completed_label">Turn off after boot-completed</string>
-  <string id="zygote_try_umount_label">Zygote Sistem Süreci için Bağlantı Kaldırmayı Dene</string>
-  <string id="umount_for_zygote_iso_service_label">try umount for zygote isolation service</string>
   <string id="kernel_uname_label">Çekirdek (Kernel) Uname</string>
   <string id="spoof_kernel_version_label">Çekirdek Sürümünü Taklit Et</string>
   <string id="spoofed_kernel_version_label">Spoofed Kernel Version</string>

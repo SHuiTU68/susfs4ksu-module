@@ -59,9 +59,6 @@
 
   <!-- Settings -->
   <string id="susfs_log_label">Dzienniki SUSFS</string>
-  <string id="sus_su_1_label">SUS SU w trybie 1</string>
-  <string id="sus_su_label">SUS SU</string>
-  <string id="sus_su_boot_label">SUS SU przy rozruchu</string>
   <string id="auto_hide_label">Ustawienia automatycznego ukrywania</string>
   <string id="default_mounts_label">Automatyczne ukrywanie domyślnych montowań</string>
   <string id="bind_mounts_label">Automatyczne ukrywanie montowań wiązanych</string>
@@ -69,9 +66,6 @@
   <string id="auto_try_umount_label">Automatyczna próba odmontowania (przestrzeń użytkownika)</string>
   <string id="skip_legit_mounts_label">Pomiń zaufane montowanie</string>
   <string id="hide_sus_mnts_for_all_or_non_su_procs_label">Ukryj sus_mounts dla wszystkich procesów</string>
-  <string id="turn_off_after_boot_completed_label">Wyłącz po zakończeniu rozruchu</string>
-  <string id="zygote_try_umount_label">Spróbuj odmontować proces systemowy zygote</string>
-  <string id="umount_for_zygote_iso_service_label">Spróbuj odmontować usługę izolacji zygote</string>
   <string id="kernel_uname_label">Kernel uname</string>
   <string id="spoof_kernel_version_label">Sfałszuj wersję jądra</string>
   <string id="spoofed_kernel_version_label">Sfałszowana wersja jądra</string>

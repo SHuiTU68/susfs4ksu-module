@@ -59,9 +59,6 @@
 
   <!-- Settings -->
   <string id="susfs_log_label">سجلات SUSFS</string>
-  <string id="sus_su_1_label">SUS SU في الوضع 1</string>
-  <string id="sus_su_label">SUS SU</string>
-  <string id="sus_su_boot_label">SUS SU أثناء التمهيد</string>
   <string id="auto_hide_label">إخفاء الإعدادات تلقائيا</string>
   <string id="default_mounts_label">إخفاء mounts تلقائيا</string>
   <string id="bind_mounts_label">إخفاء bind mounts تلقائيا</string>
@@ -69,9 +66,6 @@
   <string id="auto_try_umount_label">try umount (userspace) تلقائي</string>
   <string id="skip_legit_mounts_label">تخطي التجميعات (mounts) الأساسية</string>
   <string id="hide_sus_mnts_for_all_or_non_su_procs_label">إخفاء sus_mounts لجميع العمليات بدون الروت</string>
-  <string id="turn_off_after_boot_completed_label">إيقاف التشغيل بعد اكتمال إعادة التشغيل</string>
-  <string id="zygote_try_umount_label">محاولة unmount على عملية النواة (zygote)</string>
-  <string id="umount_for_zygote_iso_service_label">محاولة umount لخدمة عزل zygote</string>
   <string id="kernel_uname_label">Kernel Uname</string>
   <string id="spoof_kernel_version_label">تزييف إصدار الكيرنيل</string>
   <string id="spoofed_kernel_version_label">إصدار الكيرنيل المزيف</string>
