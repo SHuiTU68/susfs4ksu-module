@@ -217,6 +217,30 @@ EOF
 	} 2>/dev/null || true
 fi
 
+# ===== sus_mount late scan (boot_completed) =====
+# Modules such as zygisk_lsposed bind /apex/com.android.art/bin/dex2oat*
+# AFTER late_start, i.e. after post-mount.sh has already run, so those mounts
+# would stay visible in the app view of /proc/mounts.  Scan once more here and
+# register every straggler with the KPM (hide-only, no umount).
+if [ "$hide_sus_mnts_for_all_or_non_su_procs" -ge 1 ] 2>/dev/null &&
+   echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
+    ${SUSFS_BIN} hide_sus_mnts_for_all_procs 1 >/dev/null 2>&1 || \
+        ${SUSFS_BIN} hide_sus_mnts_for_non_su_procs 1 >/dev/null 2>&1
+    _late_mp_count=0
+    for _mp in $(grep -E '/adb/modules|/data/adb/(modules|ap|ksu)|lowerdir=/data/adb|upperdir=/data/adb' \
+            /proc/self/mountinfo 2>/dev/null | awk '{print $5}' | sort -u); do
+        [ -z "$_mp" ] && continue
+        case "$_mp" in
+            /proc/*|/sys/*|/dev/*) continue ;;
+        esac
+        ${SUSFS_BIN} add_sus_mount "$_mp" >/dev/null 2>&1 && {
+            _late_mp_count=$((_late_mp_count + 1))
+            echo "[sus_mount]: auto(boot-completed) $_mp" >> "$logfile1"
+        }
+    done
+    echo "[sus_mount]: boot-completed scan registered $_late_mp_count mount point(s)" >> "$logfile1"
+fi
+
 # Auto try_umount (v1.5.5+)
 # NOTE: The actual `umount -l` is done in post-fs-data.sh (before zygote).
 # This block only re-registers susfs mount paths with the KPM for

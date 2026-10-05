@@ -74,6 +74,36 @@ if [ "$force_hide_lsposed" = "1" ] && echo "$susfs_features" | grep -q "CONFIG_K
     done
 fi
 
+# ===== sus_mount auto-discovery (late_start) =====
+# Module bind mounts (IMS_VAROS, PUIThemeCustomized, zygisk_lsposed, ...)
+# show their source path in the mountinfo *root* field, fs-relative to /data:
+#     root=/adb/modules/IMS_VAROS/MODS/... point=/vendor/etc/xgf.cfg
+# Detection tools grep for the "/adb/modules" token and for Magisk-style
+# mount records, so every such mount point is registered with the KPM
+# (hide-only: the mount stays alive for root, only the app view is filtered).
+# This runs at late_start, i.e. after all other modules have mounted.
+if [ "$hide_sus_mnts_for_all_or_non_su_procs" -ge 1 ] 2>/dev/null &&
+   echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
+    # (re-)arm the KPM hide hook: with config value 2 boot-completed.sh turns
+    # hiding off again, and then no registered entry has any effect.
+    ${SUSFS_BIN} hide_sus_mnts_for_all_procs 1 >/dev/null 2>&1 || \
+        ${SUSFS_BIN} hide_sus_mnts_for_non_su_procs 1 >/dev/null 2>&1
+    _sus_mp_list=$(grep -E '/adb/modules|/data/adb/(modules|ap|ksu)|lowerdir=/data/adb|upperdir=/data/adb' \
+        /proc/self/mountinfo 2>/dev/null | awk '{print $5}' | sort -u)
+    _sus_mp_count=0
+    for _mp in $_sus_mp_list; do
+        [ -z "$_mp" ] && continue
+        case "$_mp" in
+            /proc/*|/sys/*|/dev/*) continue ;;   # never hide core pseudo fs
+        esac
+        ${SUSFS_BIN} add_sus_mount "$_mp" >/dev/null 2>&1 && {
+            _sus_mp_count=$((_sus_mp_count + 1))
+            echo "[sus_mount]: auto(late) $_mp" >> "$logfile1"
+        }
+    done
+    echo "[sus_mount]: late auto-discovery registered $_sus_mp_count mount point(s)" >> "$logfile1"
+fi
+
 # SUSFS Logging — reuse the dmesg cache (refreshed above if missing).
 grep -iE "susfs_auto_add|ksu_susfs|susfs:|susfs_kpm:" "$dmesg_cache" >> $logfile
 endmsg=$(grep -E '^\[ *[0-9]' "$dmesg_cache" | tail -n 1 | sed 's/^\[ *//; s/\].*//')

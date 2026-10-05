@@ -31,13 +31,55 @@ if grep -qE "susfs:|susfs_kpm:" "$dmesg_cache" 2>/dev/null; then
 	kpm_in_dmesg=1
 fi
 
+# ---- KPM store self-heal -------------------------------------------------
+# APatch/KernelPatch loads every /data/adb/ap/kpm/<id>/<id>.kpm at the
+# post-fs-data user event (kernel/patch/android/userd.c:
+# load_ap_kpm_modules()), unless a sibling <id>/disable marker exists.
+# A missing or stale store copy is *the* "module not running after reboot"
+# failure mode -- the kernel then logs
+#   "AP KPM loading done: loaded=0 skipped=0 total=0"
+# and nothing answers on the command channel.  Byte-compare and re-deploy on
+# every boot so the store always matches this module before the loader runs.
+KPM_ID=susfs_kpm
+KPM_STORE_DIR=/data/adb/ap/kpm/${KPM_ID}
+KPM_STORE="${KPM_STORE_DIR}/${KPM_ID}.kpm"
+KPM_SRC="${MODDIR}/${KPM_ID}.kpm"
+kpm_store_state=unknown
+if [ ! -f "$KPM_SRC" ]; then
+	kpm_store_state=no-source
+elif [ -f "${KPM_STORE_DIR}/disable" ]; then
+	# Respect an explicit "disabled" toggle from the APatch KPM tab.
+	kpm_store_state=disabled-by-user
+elif [ ! -f "$KPM_STORE" ]; then
+	mkdir -p "$KPM_STORE_DIR" 2>/dev/null
+	if cp -f "$KPM_SRC" "$KPM_STORE" 2>/dev/null; then
+		kpm_store_state=deployed
+	else
+		kpm_store_state=deploy-failed
+	fi
+elif cmp -s "$KPM_SRC" "$KPM_STORE"; then
+	kpm_store_state=ok
+else
+	if cp -f "$KPM_SRC" "$KPM_STORE" 2>/dev/null; then
+		kpm_store_state=updated
+	else
+		kpm_store_state=update-failed
+	fi
+fi
+if [ -f "$KPM_STORE" ]; then
+	chmod 644 "$KPM_STORE" 2>/dev/null
+	chown 0:0 "$KPM_STORE" 2>/dev/null
+fi
+echo "susfs4ksu/post-fs-data: kpm_store=$kpm_store_state src=$KPM_SRC store=$KPM_STORE" >> "$logfile" 2>/dev/null
 # ---- KPM identity -------------------------------------------------------
 # Order of truth:
 #   1. the kcmp command channel (`ksu_susfs show ...`) — it is the ONLY
 #      source that reflects the KPM that is *actually running*, needs no
 #      superkey, and cannot be fooled by dmesg rotation.  The KPM always
-#      answers on it, whether it was loaded from the boot image (APatch
-#      embed) or from /data/adb/ap/kpm/.
+#      answers on it, whether the kernel loaded it from /data/adb/ap/kpm/
+#      (the normal path: userd.c load_ap_kpm_modules() at the post-fs-data
+#      event, "KP AP KPM loading done") or the APatch app pushed one into the
+#      kernel at runtime.
 #   2. the dmesg cache — only useful for a boot-image KPM whose "loaded"
 #      printk predates this script (a store KPM loads later, so it is
 #      invisible here).
@@ -148,11 +190,12 @@ live=0
 [ "$kpm_source" = "channel" ] && live=1
 [ "$kpm_source" = "dmesg" ] && live=1
 
-# A running KPM whose version differs from the one this module ships means a
-# stale copy embedded in the boot image is shadowing ours: the embedded KPM
-# is loaded at kernel init, long before /data/adb/ap/kpm/ is scanned at the
-# post-fs-data event, so the embedded copy always wins and module updates
-# appear to do nothing.
+# A running KPM whose version differs from the one this module ships means
+# something other than this module's store copy is in the kernel: a KPM
+# embedded in the boot image (APatch app -> KPM tab, loaded at kernel init
+# before /data/adb/ap/kpm/ is even readable) or a copy the APatch app pushed
+# at runtime.  Either way module updates appear to do nothing until that
+# other copy is removed, so say so instead of reporting a green status.
 if [ $live -eq 1 ] && [ -n "$version" ] && [ "${version#v}" != "$KPM_EXPECTED_VERSION" ]; then
 	kpm_warning="running KPM is v${version#v} but this module ships v${KPM_EXPECTED_VERSION}; remove the embedded KPM from the boot image (APatch -> KPM tab) or re-embed v${KPM_EXPECTED_VERSION}"
 fi
@@ -165,6 +208,7 @@ if [ $live -eq 1 ]; then
 		echo "timestamp: $(date)"
 		echo "status: ACTIVE"
 		echo "source: $kpm_source"
+		echo "kpm_store: $kpm_store_state"
 		echo "version: $version"
 		echo "variant: $susfs_variant"
 		echo "features: $susfs_features"
@@ -180,6 +224,7 @@ else
 		echo "timestamp: $(date)"
 		echo "status: FAILED (KPM not reachable — no command-channel reply)"
 		echo "source: builtin-fallback (version $version is this module's, not a live reading)"
+		echo "kpm_store: $kpm_store_state"
 		echo "uid: $(id -u)"
 		echo "dmesg_cache: $(wc -l < "$dmesg_cache" 2>/dev/null | tr -d ' ') susfs line(s)"
 		echo "hint: 1) check the KPM is loaded (APatch app -> KPM tab)"
@@ -312,7 +357,8 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT"; then
         done
         # Also scan /proc/1/mountinfo for any mounts referencing /data/adb
         # (some APatch versions still use overlay for specific paths)
-        grep -E '/data/adb/(modules|ap|ksu)' /proc/1/mountinfo 2>/dev/null | \
+        grep -E '/data/adb/(modules|ap|ksu)|/adb/modules|lowerdir=/data/adb|upperdir=/data/adb' \
+            /proc/1/mountinfo 2>/dev/null | \
             awk '{print $5}' | sort -u | while read -r mp; do
             [ -z "$mp" ] && continue
             ${SUSFS_BIN} add_sus_mount "$mp" 2>/dev/null && echo "[sus_mount]: auto $mp" >> "$logfile1"
@@ -352,7 +398,8 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_TRY_UMOUNT"; then
                 ${SUSFS_BIN} add_try_umount "$auto_mp" 1 2>/dev/null && echo "[try_umount]: auto $auto_mp" >> "$logfile1"
             done
             # Also scan mountinfo for any overlay mounts referencing /data/adb
-            grep -E '/data/adb/(modules|ap|ksu)' /proc/1/mountinfo 2>/dev/null | \
+            grep -E '/data/adb/(modules|ap|ksu)|/adb/modules|lowerdir=/data/adb|upperdir=/data/adb' \
+                /proc/1/mountinfo 2>/dev/null | \
                 awk '{print $5}' | sort -u | while read -r mp; do
                 [ -z "$mp" ] && continue
                 ${SUSFS_BIN} add_try_umount "$mp" 1 2>/dev/null && echo "[try_umount]: auto $mp" >> "$logfile1"
