@@ -51,6 +51,10 @@
 #define __NR_kcmp_channel   272
 #define SUSFS_CMD_MAGIC     0x5355534653595343ULL /* "SUSFSYSC" */
 
+/* Must be stored in the int passed as the 5th syscall argument before the KPM
+ * will write the real return code into it (see kpm_call.h). */
+#define KPM_RC_SENTINEL     0x7fffffff
+
 /* CMD codes from susfs_kpm.h */
 
 void show_print_help(void){
@@ -84,8 +88,8 @@ static int syscall_show(unsigned int cmd, char *out, size_t outlen)
 	/* The 5th argument carries the real rc: KernelPatch only honours
 	 * skip_origin for slots registered via hook_syscalln_override(), so with
 	 * an older KPM the syscall returns -ESRCH even though the reply below was
-	 * written.  0x7fffffff = "not published". */
-	int rc_out = 0x7fffffff;
+	 * written.  KPM_RC_SENTINEL = "not published". */
+	int rc_out = KPM_RC_SENTINEL;
 	errno = 0;
 	long rc = syscall(__NR_kcmp_channel, SUSFS_CMD_MAGIC,
 	                  cmd_str, out, (long)outlen, &rc_out);

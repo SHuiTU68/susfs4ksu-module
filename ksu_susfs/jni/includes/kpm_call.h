@@ -70,6 +70,12 @@
 #define __NR_kcmp_channel       272
 #define SUSFS_CMD_MAGIC         0x5355534653595343ULL /* "SUSFSYSC" */
 
+/* Sentinel the 5th syscall argument must be pre-set to before the KPM will
+ * write the real return code into it.  The KPM checks for this marker, so a
+ * caller that does not know about the extended argument (or a garbage
+ * register) can never be written to.  Matches SUSFS_RC_SENTINEL in the KPM. */
+#define KPM_RC_SENTINEL         0x7fffffff
+
 /* KernelPatch version we target (must match the running kpimg). Bump if a
  * future KP release starts enforcing this field. */
 #define KP_MAJOR 0
@@ -337,7 +343,7 @@ static inline int kpm_channel_alive(void)
 
     char probe[64];
     probe[0] = '\0';
-    int rc_out = 0x7fffffff;
+    int rc_out = KPM_RC_SENTINEL;
     syscall(__NR_kcmp_channel, SUSFS_CMD_MAGIC, "555E1",
             probe, (long)sizeof(probe), &rc_out);
     alive = (probe[0] != '\0') ? 1 : 0;
@@ -354,6 +360,10 @@ static inline int kpm_channel_alive(void)
  *   entirely — no superkey needed, works for root shell (uid 0).
  *
  *   The 5th argument is an int* the KPM fills with the real return value.
+ *   It must be pre-set to KPM_RC_SENTINEL (0x7fffffff): the KPM verifies that
+ *   marker before writing, because older userspace passes only four arguments
+ *   and the register it would read as the 5th is undefined.  An unarmed
+ *   pointer is never written to.
  *   KernelPatch only permits a before-hook to suppress the real syscall
  *   (skip_origin) for slots registered through hook_syscalln_override();
  *   with plain hook_syscalln() the kernel still ran the real
@@ -372,8 +382,8 @@ static inline int kpm_channel_alive(void)
 static inline long kpm_control(const char *ctl_args,
                                char *out_msg, long outlen)
 {
-    /* 0x7fffffff = "KPM did not publish a result" (legacy KPM / no KPM). */
-    const int kpm_no_result = 0x7fffffff;
+    /* KPM_RC_SENTINEL = "KPM did not publish a result" (legacy KPM / no KPM). */
+    const int kpm_no_result = KPM_RC_SENTINEL;
     if (!ctl_args || !*ctl_args) return -EINVAL;
 
     /* Primary: syscall command channel via __NR_kcmp hook */

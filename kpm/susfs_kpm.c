@@ -608,9 +608,10 @@ KPM_EXIT(susfs_exit);
  *
  * the before callback checks the magic; if it matches, it reads cmd_buf
  * from userspace, dispatches via susfs_ctl0(), writes the result to
- * out_buf, publishes the real return value through rc_out_ptr (optional,
- * may be NULL), and short-circuits the original kcmp syscall.  Non-magic
- * calls pass through to the real kcmp unchanged.
+ * out_buf, publishes the real return value through rc_out_ptr (optional:
+ * it must be NULL or point to an int pre-set to SUSFS_RC_SENTINEL — see
+ * rc_out_is_armed()), and short-circuits the original kcmp syscall.
+ * Non-magic calls pass through to the real kcmp unchanged.
  *
  * IMPORTANT — hook_syscalln_override() is mandatory here.  KernelPatch only
  * honours skip_origin for slots registered with allow_skip=1; plain
@@ -643,6 +644,33 @@ KPM_EXIT(susfs_exit);
  * compat_copy_to_user(). */
 #define SUSFS_USER_ADDR_MAX (1UL << 48)
 
+/* The rc-out pointer is opt-in and *armed* by userspace: the int it points to
+ * must pre-store this sentinel.  The handshake matters because old userspace
+ * passes only four arguments, so x4 holds whatever the caller left there (a
+ * length, a stale register, ...).  Writing the result unconditionally would
+ * poke 4 bytes into a random address of the calling process; with the check an
+ * unarmed pointer is only ever *read*, once, by a bounded copy. */
+#define SUSFS_RC_SENTINEL 0x7fffffff
+
+/* 1 only when *p holds SUSFS_RC_SENTINEL, i.e. the caller opted in. */
+static int rc_out_is_armed(int __user *p)
+{
+    int probe;
+    long n;
+
+    if (!p) return 0;
+    if ((unsigned long)p >= SUSFS_USER_ADDR_MAX) return 0;
+    if (((unsigned long)p & (sizeof(int) - 1)) != 0) return 0;
+    /* compat_strncpy_from_user stops at NUL.  The sentinel contains no NUL
+     * byte, so only a full 4-byte read means the value really is the sentinel
+     * (a garbage pointer either faults — negative return — or reads something
+     * else). */
+    n = compat_strncpy_from_user((char *)&probe, (const char __user *)p,
+                                 sizeof(probe));
+    if (n != (long)sizeof(probe)) return 0;
+    return probe == SUSFS_RC_SENTINEL;
+}
+
 static void before_cmd_channel(hook_fargs5_t *args, void *udata)
 {
     /* On arm64 GKI, has_syscall_wrapper=1 so arg0 is pt_regs*.  Use
@@ -653,10 +681,10 @@ static void before_cmd_channel(hook_fargs5_t *args, void *udata)
     const char __user *cmd_buf = (const char __user *)syscall_argn(args, 1);
     char __user *out_buf = (char __user *)syscall_argn(args, 2);
     int out_len = (int)syscall_argn(args, 3);
-    /* Optional 5th argument: int* that receives the real return value.  New
-     * userspace always supplies it; old userspace leaves it 0. */
+    /* Optional 5th argument: int* receiving the real return value.  Only
+     * written when userspace armed it with SUSFS_RC_SENTINEL. */
     int __user *rc_out = (int __user *)syscall_argn(args, 4);
-    int rc_out_ok = (rc_out && (unsigned long)rc_out < SUSFS_USER_ADDR_MAX);
+    int rc_out_ok = rc_out_is_armed(rc_out);
 
     /* Read command string from userspace */
     char cmd[2048];
