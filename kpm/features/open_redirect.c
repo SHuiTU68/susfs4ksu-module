@@ -403,16 +403,16 @@ int susfs_open_redirect_init_hooks(void)
     hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
     HIDE_PTR(wrap);
 
-    kpm_kern_path = (typeof(kpm_kern_path))kallsyms_lookup_name("kern_path");
-    kpm_path_put = (typeof(kpm_path_put))kallsyms_lookup_name("path_put");
+    kpm_kern_path = (typeof(kpm_kern_path))susfs_ksym("kern_path");
+    kpm_path_put = (typeof(kpm_path_put))susfs_ksym("path_put");
     if (!kpm_kern_path)
         kpm_kern_path =
-            (typeof(kpm_kern_path))kallsyms_lookup_name("kern_path.cfi_jt");
+            (typeof(kpm_kern_path))susfs_ksym("kern_path.cfi_jt");
     if (!kpm_path_put)
         kpm_path_put =
-            (typeof(kpm_path_put))kallsyms_lookup_name("path_put.cfi_jt");
+            (typeof(kpm_path_put))susfs_ksym("path_put.cfi_jt");
 
-    do_sys_openat2_addr = (void *)kallsyms_lookup_name("do_sys_openat2");
+    do_sys_openat2_addr = (void *)susfs_ksym("do_sys_openat2");
     if (do_sys_openat2_addr) {
         err = wrap(do_sys_openat2_addr, 3, (void *)before_do_sys_openat2, 0, 0);
         if (err == HOOK_NO_ERR) {
@@ -428,7 +428,7 @@ int susfs_open_redirect_init_hooks(void)
               "(redirect inert)\n");
     }
 
-    vfs_readlink_addr = (void *)kallsyms_lookup_name("vfs_readlink");
+    vfs_readlink_addr = (void *)susfs_ksym("vfs_readlink");
     if (vfs_readlink_addr) {
         err = wrap(vfs_readlink_addr, 3, (void *)before_vfs_readlink, 0, 0);
         if (err != HOOK_NO_ERR) {
@@ -438,7 +438,7 @@ int susfs_open_redirect_init_hooks(void)
         }
     }
 
-    d_path_addr = (void *)kallsyms_lookup_name("d_path");
+    d_path_addr = (void *)susfs_ksym("d_path");
     if (d_path_addr) {
         err = wrap(d_path_addr, 3, 0, (void *)after_d_path, 0);
         if (err != HOOK_NO_ERR) {
@@ -448,7 +448,7 @@ int susfs_open_redirect_init_hooks(void)
     }
 
     /* seq_path also has a chain item from nothing else; maps name column. */
-    seq_path_addr = (void *)kallsyms_lookup_name("seq_path");
+    seq_path_addr = (void *)susfs_ksym("seq_path");
     if (seq_path_addr) {
         err = wrap(seq_path_addr, 3, (void *)before_seq_path, 0, 0);
         if (err != HOOK_NO_ERR) {

@@ -112,7 +112,7 @@ int susfs_set_cmdline_init_hooks(void)
 
     /* GKI 6.6: /proc/bootconfig */
     boot_config_proc_show_addr =
-        (void *)kallsyms_lookup_name("boot_config_proc_show");
+        (void *)susfs_ksym("boot_config_proc_show");
     if (boot_config_proc_show_addr) {
         err = wrap(boot_config_proc_show_addr, 2, (void *)before_cmdline_show,
                    0, 0);
@@ -124,7 +124,7 @@ int susfs_set_cmdline_init_hooks(void)
     }
 
     /* non-GKI: /proc/cmdline */
-    cmdline_proc_show_addr = (void *)kallsyms_lookup_name("cmdline_proc_show");
+    cmdline_proc_show_addr = (void *)susfs_ksym("cmdline_proc_show");
     if (cmdline_proc_show_addr) {
         err = wrap(cmdline_proc_show_addr, 2, (void *)before_cmdline_show, 0, 0);
         if (err != HOOK_NO_ERR) {

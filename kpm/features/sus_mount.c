@@ -266,18 +266,18 @@ int susfs_sus_mount_init_hooks(void)
     hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
     HIDE_PTR(wrap);
 
-    kpm_kern_path = (typeof(kpm_kern_path))kallsyms_lookup_name("kern_path");
-    kpm_path_put = (typeof(kpm_path_put))kallsyms_lookup_name("path_put");
+    kpm_kern_path = (typeof(kpm_kern_path))susfs_ksym("kern_path");
+    kpm_path_put = (typeof(kpm_path_put))susfs_ksym("path_put");
     if (!kpm_kern_path)
         kpm_kern_path =
-            (typeof(kpm_kern_path))kallsyms_lookup_name("kern_path.cfi_jt");
+            (typeof(kpm_kern_path))susfs_ksym("kern_path.cfi_jt");
     if (!kpm_path_put)
         kpm_path_put =
-            (typeof(kpm_path_put))kallsyms_lookup_name("path_put.cfi_jt");
+            (typeof(kpm_path_put))susfs_ksym("path_put.cfi_jt");
 
-    show_vfsmnt_addr = (void *)kallsyms_lookup_name("show_vfsmnt");
-    show_mountinfo_addr = (void *)kallsyms_lookup_name("show_mountinfo");
-    show_vfsstat_addr = (void *)kallsyms_lookup_name("show_vfsstat");
+    show_vfsmnt_addr = (void *)susfs_ksym("show_vfsmnt");
+    show_mountinfo_addr = (void *)susfs_ksym("show_mountinfo");
+    show_vfsstat_addr = (void *)susfs_ksym("show_vfsstat");
 
     /* show_vfsmnt  -> /proc/mounts, /proc/<pid>/mounts
      * show_mountinfo -> /proc/self/mountinfo

@@ -178,18 +178,18 @@ int susfs_sus_map_init_hooks(void)
     hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
     HIDE_PTR(wrap);
 
-    kpm_kern_path = (typeof(kpm_kern_path))kallsyms_lookup_name("kern_path");
-    kpm_path_put = (typeof(kpm_path_put))kallsyms_lookup_name("path_put");
+    kpm_kern_path = (typeof(kpm_kern_path))susfs_ksym("kern_path");
+    kpm_path_put = (typeof(kpm_path_put))susfs_ksym("path_put");
     if (!kpm_kern_path)
         kpm_kern_path =
-            (typeof(kpm_kern_path))kallsyms_lookup_name("kern_path.cfi_jt");
+            (typeof(kpm_kern_path))susfs_ksym("kern_path.cfi_jt");
     if (!kpm_path_put)
         kpm_path_put =
-            (typeof(kpm_path_put))kallsyms_lookup_name("path_put.cfi_jt");
+            (typeof(kpm_path_put))susfs_ksym("path_put.cfi_jt");
 
-    show_map_vma_addr = (void *)kallsyms_lookup_name("show_map_vma");
+    show_map_vma_addr = (void *)susfs_ksym("show_map_vma");
     if (!show_map_vma_addr)
-        show_map_vma_addr = (void *)kallsyms_lookup_name("show_map_vma.cfi_jt");
+        show_map_vma_addr = (void *)susfs_ksym("show_map_vma.cfi_jt");
 
     if (!show_map_vma_addr) {
         logke("susfs_kpm: sus_map: show_map_vma not in kallsyms (inert)\n");

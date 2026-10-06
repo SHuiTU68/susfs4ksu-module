@@ -64,6 +64,40 @@ extern void (*susfs__raw_spin_unlock)(void *);
  * detect the KPM via `dmesg | grep susfs_kpm`. */
 extern int (*susfs_printk)(const char *fmt, ...);
 
+/* ===== version-tolerant symbol resolution =====
+ *
+ * KernelPatch >= 0.13.6 exports kallsyms_lookup_name_by_suffix().  Unlike
+ * kallsyms_lookup_name() (exact match only) it retries the lookup through a
+ * kallsyms_on_each_symbol() scan, which is what lets a KPM survive kernels
+ * whose toolchain renamed the function we want: LTO and clang's interprocedural
+ * cloning emit "foo.llvm.1234", "foo.constprop.0", "foo.isra.0" instead of the
+ * plain "foo".  On such kernels an exact-match lookup silently returns NULL and
+ * the feature quietly degrades.
+ *
+ * We must NOT reference it directly.  The KPM loader
+ * (KernelPatch kernel/patch/module/module.c:simplify_symbols) resolves every
+ * SHN_UNDEF symbol against KernelPatch's export table and fails the WHOLE load
+ * with -ENOENT when one is missing -- there is no weak-symbol semantics, so a
+ * direct reference would make this KPM unloadable on any KernelPatch that
+ * predates the symbol.  susfs_ksym_init() therefore asks symbol_lookup_name()
+ * (KernelPatch's export-table query) for the pointer at runtime and simply
+ * leaves it NULL when the running KernelPatch is too old.
+ *
+ * susfs_ksym() is the resolver feature code should use.  It tries, in order:
+ *   1. the exact name                      (kallsyms_lookup_name)
+ *   2. KernelPatch's scan, when available  (handles .llvm.<hash> et al.)
+ *   3. a short list of toolchain suffixes  (see susfs_kpm.c; also covers
+ *      KernelPatch < 0.13.6 and the case where cfi_bypass is false)
+ * KernelPatch gates step 2 on cfi_bypass and returns 0 *before* entering
+ * kallsyms_on_each_symbol() when CFI is not bypassed, so calling it is never
+ * worse than an exact lookup and never hands an unchecked indirect target to a
+ * CFI kernel on our behalf.
+ */
+typedef unsigned long (*susfs_klns_t)(const char *);
+extern susfs_klns_t susfs_kallsyms_by_suffix;
+void susfs_ksym_init(void);
+unsigned long susfs_ksym(const char *name);
+
 /* ===== Command codes =====
  *
  * This table is a byte-for-byte mirror of the authoritative susfs v2.3.0

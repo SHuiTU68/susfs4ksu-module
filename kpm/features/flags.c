@@ -178,10 +178,10 @@ int susfs_avc_log_spoofing_init_hooks(void)
      * field of an AVC audit message.  On GKI 6.6 it's exported via
      * kallsyms.  Try the bare name and the .cfi_jt CFI jump-table variant. */
     audit_log_format_addr =
-        (void *)kallsyms_lookup_name("audit_log_format");
+        (void *)susfs_ksym("audit_log_format");
     if (!audit_log_format_addr)
         audit_log_format_addr =
-            (void *)kallsyms_lookup_name("audit_log_format.cfi_jt");
+            (void *)susfs_ksym("audit_log_format.cfi_jt");
 
     if (!audit_log_format_addr) {
         logke("susfs_kpm: audit_log_format not found, "

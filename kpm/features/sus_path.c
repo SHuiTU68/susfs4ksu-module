@@ -457,10 +457,10 @@ int susfs_sus_path_init_hooks(void)
 
     HIDE_PTR(wrap);
 
-    do_sys_openat2_addr = (void *)kallsyms_lookup_name("do_sys_openat2");
-    do_faccessat_addr   = (void *)kallsyms_lookup_name("do_faccessat");
-    vfs_fstatat_addr    = (void *)kallsyms_lookup_name("vfs_fstatat");
-    do_statx_addr       = (void *)kallsyms_lookup_name("do_statx");
+    do_sys_openat2_addr = (void *)susfs_ksym("do_sys_openat2");
+    do_faccessat_addr   = (void *)susfs_ksym("do_faccessat");
+    vfs_fstatat_addr    = (void *)susfs_ksym("vfs_fstatat");
+    do_statx_addr       = (void *)susfs_ksym("do_statx");
 
     /* openat/openat2.  This is the same function open_redirect hooks (it
      * runs later, see susfs_init() ordering), and KernelPatch supports

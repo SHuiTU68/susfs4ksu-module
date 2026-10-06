@@ -481,20 +481,20 @@ int susfs_sus_kstat_init_hooks(void)
     hook_err_t (*wrap)(void *, int32_t, void *, void *, void *) = hook_wrap;
     HIDE_PTR(wrap);
 
-    kpm_kern_path = (typeof(kpm_kern_path))kallsyms_lookup_name("kern_path");
-    kpm_path_put = (typeof(kpm_path_put))kallsyms_lookup_name("path_put");
+    kpm_kern_path = (typeof(kpm_kern_path))susfs_ksym("kern_path");
+    kpm_path_put = (typeof(kpm_path_put))susfs_ksym("path_put");
     if (!kpm_kern_path)
         kpm_kern_path =
-            (typeof(kpm_kern_path))kallsyms_lookup_name("kern_path.cfi_jt");
+            (typeof(kpm_kern_path))susfs_ksym("kern_path.cfi_jt");
     if (!kpm_path_put)
         kpm_path_put =
-            (typeof(kpm_path_put))kallsyms_lookup_name("path_put.cfi_jt");
+            (typeof(kpm_path_put))susfs_ksym("path_put.cfi_jt");
 
     /* 1) vfs_getattr — struct path *, struct kstat *, u32, unsigned int.
      *    After-hook: the fs has filled `stat` already. */
-    vfs_getattr_addr = (void *)kallsyms_lookup_name("vfs_getattr");
+    vfs_getattr_addr = (void *)susfs_ksym("vfs_getattr");
     if (!vfs_getattr_addr)
-        vfs_getattr_addr = (void *)kallsyms_lookup_name("vfs_getattr.cfi_jt");
+        vfs_getattr_addr = (void *)susfs_ksym("vfs_getattr.cfi_jt");
     if (vfs_getattr_addr) {
         err = wrap(vfs_getattr_addr, 4, 0, (void *)after_vfs_getattr, 0);
         if (err == HOOK_NO_ERR) {
@@ -509,7 +509,7 @@ int susfs_sus_kstat_init_hooks(void)
     }
 
     /* 2) show_map_vma(m, vma) + show_vma_header_prefix(...) — maps dev/ino */
-    show_map_vma_addr = (void *)kallsyms_lookup_name("show_map_vma");
+    show_map_vma_addr = (void *)susfs_ksym("show_map_vma");
     if (show_map_vma_addr) {
         err = wrap(show_map_vma_addr, 2, (void *)before_show_map_vma, 0, 0);
         if (err != HOOK_NO_ERR) {
@@ -518,7 +518,7 @@ int susfs_sus_kstat_init_hooks(void)
         }
     }
     show_vma_header_prefix_addr =
-        (void *)kallsyms_lookup_name("show_vma_header_prefix");
+        (void *)susfs_ksym("show_vma_header_prefix");
     if (show_vma_header_prefix_addr) {
         err = wrap(show_vma_header_prefix_addr, 7,
                    (void *)before_show_vma_header_prefix, 0, 0);

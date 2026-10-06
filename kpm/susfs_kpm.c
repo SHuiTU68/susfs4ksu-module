@@ -80,6 +80,115 @@ void *susfs_kzalloc(size_t size, gfp_t flags)
     return NULL;
 }
 
+/* ===== version-tolerant symbol resolution — see susfs_kpm.h ===== */
+
+/* KernelPatch's export-table query (kernel/base/symbol.c; KP_EXPORT_SYMBOL'd
+ * and advertised in KP_FEATURES as "symbol_lookup_name").  Declared here rather
+ * than by including KernelPatch's private <symbol.h>.  Exported since
+ * KernelPatch 0.13.3, i.e. below the 0.13.9 floor this module already has
+ * because of hook_syscalln_override, so importing it costs no compatibility. */
+extern unsigned long symbol_lookup_name(const char *name);
+
+/* KernelPatch's own version, packed as (major << 16) | (minor << 8) | patch
+ * (kernel/include/common.h:VERSION).  Exported since 0.4.0 — diagnostics only. */
+extern uint32_t kpver;
+
+susfs_klns_t susfs_kallsyms_by_suffix;
+
+/* Toolchain suffixes we try ourselves, after the exact lookup and
+ * KernelPatch's scan both missed.  Deliberately narrow:
+ *
+ *   .cfi_jt      CFI jump-table stub — same ABI, and the entry point that is
+ *                actually callable on a CFI kernel.  KernelPatch's own scan
+ *                skips these on purpose (symbol_has_compiler_suffix() rejects
+ *                any name containing a "cfi" component), so this is the one
+ *                case its scan cannot cover and we must.
+ *   .cold        cold-section clone — same ABI.
+ *   .constprop.0, .isra.0
+ *                first-generation clones.  These normally keep the signature,
+ *                but a constprop clone can drop an argument that was constant
+ *                at every call site, so they are accepted only as a last
+ *                resort and only at init time.
+ *   .part.N      NOT tried: a ".part" symbol is a fragment of a function, not
+ *                a callable whole, so it cannot stand in for its base name.
+ *   .llvm.<n>    NOT tried: the hash is not predictable — that case is exactly
+ *                what KernelPatch's scan (step 2) exists for.
+ *
+ * Every candidate is only reached after an exact-match miss, so kernels whose
+ * symbols are unrenamed pay nothing for this list. */
+static const char *const susfs_ksym_suffixes[] = {
+    ".cfi_jt", ".cold", ".constprop.0", ".isra.0",
+};
+#define SUSFS_KSYM_SUFFIX_COUNT \
+    (sizeof(susfs_ksym_suffixes) / sizeof(susfs_ksym_suffixes[0]))
+#define SUSFS_KSYM_BUF 96
+
+static unsigned long susfs_ksym_try_suffixes(const char *name)
+{
+    char buf[SUSFS_KSYM_BUF];
+    unsigned int i, j;
+    size_t n = 0;
+
+    /* No strcpy/strlen/strcat here: KernelPatch's <linux/string.h> wrappers
+     * call the unresolvable kf_* pointers (see susfs_kpm.h), and this also runs
+     * before susfs_strcmp/susfs_memcpy are resolved.  Plain byte loops are safe
+     * because the Makefile builds with -fno-builtin, so clang never rewrites
+     * them into memcpy() calls. */
+    while (name[n]) {
+        if (n + 1 >= SUSFS_KSYM_BUF) return 0; /* too long to extend */
+        buf[n] = name[n];
+        n++;
+    }
+
+    for (i = 0; i < SUSFS_KSYM_SUFFIX_COUNT; i++) {
+        const char *sfx = susfs_ksym_suffixes[i];
+        size_t k = n;
+
+        for (j = 0; sfx[j]; j++) {
+            if (k + 1 >= SUSFS_KSYM_BUF) break;
+            buf[k++] = sfx[j];
+        }
+        if (sfx[j]) continue; /* candidate did not fit — skip it */
+        buf[k] = '\0';
+        if (kallsyms_lookup_name) {
+            unsigned long addr = kallsyms_lookup_name(buf);
+            if (addr) return addr;
+        }
+    }
+    return 0;
+}
+
+unsigned long susfs_ksym(const char *name)
+{
+    unsigned long addr;
+
+    if (!name || !*name) return 0;
+
+    if (kallsyms_lookup_name) {
+        addr = kallsyms_lookup_name(name);
+        if (addr) return addr;
+    }
+    if (susfs_kallsyms_by_suffix) {
+        addr = susfs_kallsyms_by_suffix(name);
+        if (addr) return addr;
+    }
+    return susfs_ksym_try_suffixes(name);
+}
+
+/* Bind KernelPatch's suffix scan when the running KernelPatch has it.  Called
+ * at the very top of susfs_init(), before anything is resolved, so every
+ * lookup below already benefits from it.  On older KernelPatch this is a no-op
+ * and susfs_ksym() degrades to the exact lookup plus the suffix list above. */
+void susfs_ksym_init(void)
+{
+    /* symbol_lookup_name() is imported, not probed: the KPM loader resolves it
+     * at load time or the whole load fails, so testing it for NULL would just
+     * be an always-true comparison.  It is the *result* that can be NULL, when
+     * the running KernelPatch predates kallsyms_lookup_name_by_suffix. */
+    unsigned long p = symbol_lookup_name("kallsyms_lookup_name_by_suffix");
+    if (p) susfs_kallsyms_by_suffix = (susfs_klns_t)p;
+}
+
 /* ===== text-protocol helpers ===== */
 
 static int hex_to_uint(const char *s, unsigned int *out) {
@@ -168,6 +277,12 @@ static long susfs_init(const char *args, const char *event, void *reserved)
     logki("susfs_kpm: init, event=%s args=%s\n", event ? event : "(null)",
           args ? args : "(null)");
 
+    /* Bind KernelPatch's kallsyms_lookup_name_by_suffix() (when this
+     * KernelPatch has it) before anything below is resolved, so every lookup
+     * in this function already goes through susfs_ksym() with the suffix scan
+     * available.  See the version-tolerant resolution block above. */
+    susfs_ksym_init();
+
     /* Resolve the kernel functions we need through kallsyms_lookup_name
      * (which IS exported by KernelPatch) instead of the unresolvable kf_*
      * pointers that KernelPatch's <linux/string.h> / <linux/spinlock.h>
@@ -179,42 +294,42 @@ static long susfs_init(const char *args, const char *event, void *reserved)
      * KernelPatch's own kfunc_match_cfi() macro handles this by trying the
      * ".cfi_jt" suffix first, then falling back to the bare name.  We
      * replicate that logic here with the resolve_cfi() helper. */
-    susfs_memcpy = (typeof(susfs_memcpy))kallsyms_lookup_name("memcpy");
-    susfs_memset = (typeof(susfs_memset))kallsyms_lookup_name("memset");
-    susfs_strcmp = (typeof(susfs_strcmp))kallsyms_lookup_name("strcmp");
-    susfs_memcmp = (typeof(susfs_memcmp))kallsyms_lookup_name("memcmp");
-    susfs_kzalloc_real = (typeof(susfs_kzalloc_real))kallsyms_lookup_name("kzalloc");
-    susfs_kfree = (typeof(susfs_kfree))kallsyms_lookup_name("kfree");
-    susfs_vmalloc = (typeof(susfs_vmalloc))kallsyms_lookup_name("vmalloc");
-    susfs_vfree = (typeof(susfs_vfree))kallsyms_lookup_name("vfree");
+    susfs_memcpy = (typeof(susfs_memcpy))susfs_ksym("memcpy");
+    susfs_memset = (typeof(susfs_memset))susfs_ksym("memset");
+    susfs_strcmp = (typeof(susfs_strcmp))susfs_ksym("strcmp");
+    susfs_memcmp = (typeof(susfs_memcmp))susfs_ksym("memcmp");
+    susfs_kzalloc_real = (typeof(susfs_kzalloc_real))susfs_ksym("kzalloc");
+    susfs_kfree = (typeof(susfs_kfree))susfs_ksym("kfree");
+    susfs_vmalloc = (typeof(susfs_vmalloc))susfs_ksym("vmalloc");
+    susfs_vfree = (typeof(susfs_vfree))susfs_ksym("vfree");
     susfs__raw_spin_lock =
-        (typeof(susfs__raw_spin_lock))kallsyms_lookup_name("_raw_spin_lock");
+        (typeof(susfs__raw_spin_lock))susfs_ksym("_raw_spin_lock");
     susfs__raw_spin_unlock =
-        (typeof(susfs__raw_spin_unlock))kallsyms_lookup_name("_raw_spin_unlock");
+        (typeof(susfs__raw_spin_unlock))susfs_ksym("_raw_spin_unlock");
 
     /* CFI fallback: try "<sym>.cfi_jt" for symbols that resolved to NULL.
      * On CFI-enabled GKI kernels, many functions (memcpy, memset, etc.)
      * are only exported with the .cfi_jt suffix. */
     if (!susfs_memcpy)
-        susfs_memcpy = (typeof(susfs_memcpy))kallsyms_lookup_name("memcpy.cfi_jt");
+        susfs_memcpy = (typeof(susfs_memcpy))susfs_ksym("memcpy.cfi_jt");
     if (!susfs_memset)
-        susfs_memset = (typeof(susfs_memset))kallsyms_lookup_name("memset.cfi_jt");
+        susfs_memset = (typeof(susfs_memset))susfs_ksym("memset.cfi_jt");
     if (!susfs_strcmp)
-        susfs_strcmp = (typeof(susfs_strcmp))kallsyms_lookup_name("strcmp.cfi_jt");
+        susfs_strcmp = (typeof(susfs_strcmp))susfs_ksym("strcmp.cfi_jt");
     if (!susfs_memcmp)
-        susfs_memcmp = (typeof(susfs_memcmp))kallsyms_lookup_name("memcmp.cfi_jt");
+        susfs_memcmp = (typeof(susfs_memcmp))susfs_ksym("memcmp.cfi_jt");
     if (!susfs_kfree)
-        susfs_kfree = (typeof(susfs_kfree))kallsyms_lookup_name("kfree.cfi_jt");
+        susfs_kfree = (typeof(susfs_kfree))susfs_ksym("kfree.cfi_jt");
     if (!susfs_vmalloc)
-        susfs_vmalloc = (typeof(susfs_vmalloc))kallsyms_lookup_name("vmalloc.cfi_jt");
+        susfs_vmalloc = (typeof(susfs_vmalloc))susfs_ksym("vmalloc.cfi_jt");
     if (!susfs_vfree)
-        susfs_vfree = (typeof(susfs_vfree))kallsyms_lookup_name("vfree.cfi_jt");
+        susfs_vfree = (typeof(susfs_vfree))susfs_ksym("vfree.cfi_jt");
     if (!susfs__raw_spin_lock)
         susfs__raw_spin_lock =
-            (typeof(susfs__raw_spin_lock))kallsyms_lookup_name("_raw_spin_lock.cfi_jt");
+            (typeof(susfs__raw_spin_lock))susfs_ksym("_raw_spin_lock.cfi_jt");
     if (!susfs__raw_spin_unlock)
         susfs__raw_spin_unlock =
-            (typeof(susfs__raw_spin_unlock))kallsyms_lookup_name("_raw_spin_unlock.cfi_jt");
+            (typeof(susfs__raw_spin_unlock))susfs_ksym("_raw_spin_unlock.cfi_jt");
 
     /* kzalloc is often inlined or renamed on GKI kernels.  Try multiple
      * fallbacks in order of preference:
@@ -224,17 +339,17 @@ static long susfs_init(const char *args, const char *event, void *reserved)
      * We store a flag so susfs_kzalloc() wrapper can fall back to
      * __kmalloc+memset at call time if needed. */
     if (!susfs_kzalloc_real) {
-        susfs_kzalloc_real = (typeof(susfs_kzalloc_real))kallsyms_lookup_name("kzalloc.cfi_jt");
+        susfs_kzalloc_real = (typeof(susfs_kzalloc_real))susfs_ksym("kzalloc.cfi_jt");
     }
     if (!susfs_kzalloc_real) {
-        susfs_kzalloc_real = (typeof(susfs_kzalloc_real))kallsyms_lookup_name("__kzalloc");
+        susfs_kzalloc_real = (typeof(susfs_kzalloc_real))susfs_ksym("__kzalloc");
     }
     /* If still not found, use __kmalloc + memset as a last resort. */
     if (!susfs_kzalloc_real) {
         void *(*kmalloc_fn)(size_t, gfp_t) =
-            (typeof(kmalloc_fn))kallsyms_lookup_name("__kmalloc");
+            (typeof(kmalloc_fn))susfs_ksym("__kmalloc");
         if (!kmalloc_fn)
-            kmalloc_fn = (typeof(kmalloc_fn))kallsyms_lookup_name("__kmalloc.cfi_jt");
+            kmalloc_fn = (typeof(kmalloc_fn))susfs_ksym("__kmalloc.cfi_jt");
         if (kmalloc_fn && susfs_memset) {
             susfs_kzalloc_real = kmalloc_fn;
             susfs_kzalloc_fallback = 1;
@@ -244,7 +359,7 @@ static long susfs_init(const char *args, const char *event, void *reserved)
     /* kfree fallback: if "kfree" not found, try "__kfree" — though kfree
      * is usually present. */
     if (!susfs_kfree) {
-        susfs_kfree = (typeof(susfs_kfree))kallsyms_lookup_name("__kfree");
+        susfs_kfree = (typeof(susfs_kfree))susfs_ksym("__kfree");
     }
 
     /* Fall back to no-op spinlocks if the real ones aren't found. */
@@ -278,13 +393,13 @@ static long susfs_init(const char *args, const char *event, void *reserved)
      * boot-completed.sh detect the KPM via `dmesg | grep susfs_kpm` without
      * any supercall.  Try the bare name, the .cfi_jt CFI jump-table variant,
      * and the _printk rename used on kernels that reworked the printk export. */
-    susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("printk");
+    susfs_printk = (typeof(susfs_printk))susfs_ksym("printk");
     if (!susfs_printk)
-        susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("printk.cfi_jt");
+        susfs_printk = (typeof(susfs_printk))susfs_ksym("printk.cfi_jt");
     if (!susfs_printk)
-        susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("_printk");
+        susfs_printk = (typeof(susfs_printk))susfs_ksym("_printk");
     if (!susfs_printk)
-        susfs_printk = (typeof(susfs_printk))kallsyms_lookup_name("_printk.cfi_jt");
+        susfs_printk = (typeof(susfs_printk))susfs_ksym("_printk.cfi_jt");
 
     /* The string/mem and allocation symbols are mandatory — without them
      * the feature files cannot function.  But we MUST NOT fail the load
@@ -330,9 +445,10 @@ static long susfs_init(const char *args, const char *event, void *reserved)
      * and ksu_susfs show version/features/variant parse these lines.
      * logki above only reaches KP's internal boot log, not dmesg.
      *
-     * We emit three machine-parseable lines:
+     * We emit four machine-parseable lines:
      *   susfs_kpm: version=<v> variant=<v> core_symbols=<0|1>
      *   susfs_kpm: features=<comma-separated CONFIG_KSU_SUSFS_* list>
+     *   susfs_kpm: ksym by_suffix=<0|1> kpver=<x.y.z>
      *   susfs_kpm: loaded
      * Userspace greps "susfs_kpm:" and parses key=value pairs. */
     if (susfs_printk) {
@@ -353,6 +469,13 @@ static long susfs_init(const char *args, const char *event, void *reserved)
                      "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT,"
                      "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT,"
                      "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT");
+        /* Resolution diagnostics: which suffix-tolerant path is live, and the
+         * KernelPatch version behind it.  Machine-parseable so a report from a
+         * different kernel/APatch combination answers "why did symbol X not
+         * resolve" without a rebuild.  kpver is (major<<16)|(minor<<8)|patch. */
+        susfs_printk("susfs_kpm: ksym by_suffix=%d kpver=%u.%u.%u\n",
+                     susfs_kallsyms_by_suffix ? 1 : 0,
+                     (kpver >> 16) & 0xff, (kpver >> 8) & 0xff, kpver & 0xff);
         susfs_printk("susfs_kpm: loaded\n");
     }
 
