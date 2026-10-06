@@ -30,13 +30,11 @@ jobs:
           # KernelPatch does not export makes the whole KPM fail to load.
           #
           # It must be >= 2dc68c2 (2026-09-11, "syscall: one gated dispatcher
-          # hook instead of per-syscall hooks") — that commit introduced
+          # hook instead of per-syscall hooks") - that commit introduced
           # hook_syscalln_override() and the `allow_skip` gate in
           # syscall_dispatch_before(), both of which susfs_kpm.c depends on:
           # only a slot registered with allow_skip=1 may suppress the real
           # syscall, and hook_syscalln() registers with allow_skip=0.
-          # (Before that commit, the pin was 55c439fa4d9c945ceeb57a3610b8a9a988647cb5
-          # from 2026-07-04, which predates the dispatcher rework entirely.)
           ref: b51197aaba8f2272dd8a3e30c85698a29aa928c9
           path: KernelPatch
 
@@ -44,12 +42,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang lld llvm
-          # gcc's aarch64 cross toolchain builds the metamodule's mctl: see the
-          # "Build mctl" step for why it is not built with the NDK clang.
-          sudo apt-get install -y -qq gcc-aarch64-linux-gnu
           clang --version
           ld.lld --version
-          aarch64-linux-gnu-gcc --version | head -1
 
       - name: Build susfs_kpm.kpm
         run: |
@@ -62,20 +56,6 @@ jobs:
           echo "=== KPM built ==="
           file build/susfs_kpm.kpm
           cp build/susfs_kpm.kpm ../susfs_kpm.kpm
-
-      - name: Build mount_kpm.kpm
-        run: |
-          # The mount engine is a separate KPM package (dcache rule store) and
-          # is built from its own tree with the exact same toolchain and flags
-          # as the security engine - see mountkpm/Makefile, which shares the
-          # AuditPatch-KPM flag set and only differs in which sources it links.
-          cd mountkpm
-          make clean || true
-          make CC_OVERRIDE="clang --target=aarch64-linux-gnu" \
-               KP_DIR=../KernelPatch -j$(nproc)
-          echo "=== mount KPM built ==="
-          file build/mount_kpm.kpm
-          cp build/mount_kpm.kpm ../mount_kpm.kpm
 
       - name: Setup Android NDK
         id: setup-ndk
@@ -93,42 +73,6 @@ jobs:
           cp libs/arm64-v8a/ksu_susfs ../ksu_susfs_arm64
         env:
           NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
-
-      - name: Build mctl (metamodule userspace client)
-        run: |
-          # mctl is the userspace client for the mount engine's kcmp command
-          # channel.  It has to be a binary: the channel is a *syscall*, and
-          # Android's toybox sh cannot issue one (there is no `syscall`
-          # builtin).  Static so it carries its own libc - it runs from
-          # /data/adb/kpmmount/bin, outside anything the linker could load from.
-          #
-          # NOT built with aarch64-linux-android26-clang (the NDK) any more.
-          # With lld the resulting PT_TLS segment came out aligned to 8 bytes,
-          # and Bionic refuses to start such an executable:
-          #     executable's TLS segment is underaligned: alignment is 8,
-          #     needs to be at least 64 for ARM64 Bionic
-          # and it aborts before main(), so *every* mctl call in metamount.sh
-          # silently failed (rc=134) and the metamodule was stuck on the
-          # overlayfs path.  tools/mctl.c now also pins a 64-byte-aligned TLS
-          # variable so the segment is correct even under lld, but gcc's
-          # binutils linker is the toolchain this was verified end-to-end with,
-          # so build with it and assert the alignment below.
-          aarch64-linux-gnu-gcc -static -O2 -Wall -Wextra \
-            -o tools/mctl tools/mctl.c
-          echo "=== mctl built ==="
-          file tools/mctl
-          aarch64-linux-gnu-strip --strip-all tools/mctl || true
-          ls -l tools/mctl
-          # Fail the build loudly if PT_TLS.p_align is ever below 64 again: a
-          # silently underaligned mctl is worse than no mctl at all, because
-          # the metamodule cannot tell the difference between "engine absent"
-          # and "client aborts".
-          tls_align=$(readelf -lW tools/mctl | awk '/TLS/{print $NF; exit}')
-          echo "mctl PT_TLS alignment: ${tls_align:-<none>}"
-          case "${tls_align:-}" in
-            *0x40*|*64*) : ;;
-            *) echo "::error::mctl TLS segment alignment is '${tls_align:-none}', expected at least 64 (0x40) for ARM64 Bionic"; exit 1 ;;
-          esac
 
       - name: Update version with git HEAD
         run: |
@@ -149,6 +93,16 @@ jobs:
             sed -i "s|^version=.*|version=${CURRENT_VERSION}-CI-${RANDOM_STRING}|" module.prop
           fi
 
+      - name: Verify Duck-Detector counter-measure coverage
+        run: |
+          # The sus_path_duck.txt list is the shared-storage counter-measure.
+          # tools/check_sus_path_duck.py re-derives the probe's path set from
+          # SharedStorageProbes.kt and fails if any spelling is missing, so a
+          # stale generator cannot ship a zip whose counter-measure is dead
+          # code (which is exactly what happened before sus_path_duck.txt was
+          # added to the zip list above).
+          python3 tools/check_sus_path_duck.py
+
       - name: Assemble module zip
         run: |
           mkdir -p assemble/tools
@@ -156,13 +110,29 @@ jobs:
           cp ksu_susfs_arm64 assemble/tools/ksu_susfs_arm64
           cp susfs_kpm.kpm assemble/susfs_kpm.kpm
           # copy all module files
+          #
+          # NOTE: sus_path_duck.txt is the Duck-Detector shared-storage
+          # counter-measure.  boot-completed.sh reads $MODDIR/sus_path_duck.txt
+          # and registers every line as a sus_path; if the file is missing that
+          # whole block silently no-ops.  It was NOT in this list before, so the
+          # counter-measure was dead in every published release.
           for f in module.prop customize.sh service.sh post-fs-data.sh post-mount.sh \
                    boot-completed.sh action.sh uninstall.sh sepolicy.rule utils.sh \
                    config.sh susfs_reset.sh susfs-bin-check.sh susfs-bin-update.sh \
                    banner.png susfsicon.png update.json legit_mounts.txt \
-                   sus_mount.txt try_umount.txt sus_path.txt sus_path_loop.txt \
-                   sus_maps.txt sus_open_redirect.txt sus_kstat_statically.json; do
+                   sus_path_duck.txt sus_path.txt sus_mount.txt try_umount.txt \
+                   sus_path_loop.txt sus_maps.txt sus_open_redirect.txt \
+                   sus_kstat_statically.json; do
             [ -f "$f" ] && cp "$f" assemble/
+          done
+          # Hard fail if a file the runtime *requires* is missing from the repo.
+          # A silent omission here produces a zip that boots but whose features
+          # are dead code, which is far harder to diagnose than a red build.
+          for req in sus_path_duck.txt sus_path.txt sus_mount.txt; do
+            if [ ! -f "assemble/$req" ]; then
+              echo "::error::$req is missing from the module zip - boot-completed.sh depends on it"
+              exit 1
+            fi
           done
           # webroot
           [ -d webroot ] && cp -r webroot assemble/
@@ -171,70 +141,17 @@ jobs:
           cd ..
           ls -lh susfs4ap-kpm-*.zip
 
-      - name: Assemble metamodule zip
-        run: |
-          # The metamodule is a *separate* flashable package (id kpmmount):
-          # APatch and Magisk zip installers cannot nest, and the metamodule has
-          # to be installed as its own module so apd creates
-          # /data/adb/metamodule -> /data/adb/modules/kpmmount.
-          mkdir -p assemble-meta/tools
-          cp metamodule/module.prop metamodule/customize.sh metamodule/metamount.sh \
-             metamodule/metainstall.sh metamodule/metauninstall.sh \
-             metamodule/boot-completed.sh metamodule/action.sh metamodule/uninstall.sh \
-             assemble-meta/
-          chmod 755 assemble-meta/*.sh
-          # WebUI + icon.  apd serves <module>/webroot verbatim; module.prop's
-          # webuiIcon/actionIcon are resolved relative to the module root, which
-          # is why kpmmount.png sits at the top level and not inside webroot/.
-          if [ -d metamodule/webroot ]; then
-            cp -r metamodule/webroot assemble-meta/webroot
-          else
-            echo "::warning::metamodule/webroot is missing - the metamodule ships without a WebUI"
-          fi
-          [ -f metamodule/kpmmount.png ] && cp metamodule/kpmmount.png assemble-meta/kpmmount.png
-          # Ship the freshly built *mount* engine inside the metamodule zip.  This is
-          # the metamodule's own KPM (autoload slot mount_kpm), NOT the security
-          # engine the susfs4ksu zip carries: the two are separate packages that
-          # load from separate slots and answer on different channel magics.
-          cp mount_kpm.kpm assemble-meta/mount_kpm.kpm
-          # mctl is the userspace client for the engine's kcmp channel, built by
-          # the "Build mctl" step above.  If it ever stops being produced the
-          # metamodule silently degrades to script-only overlayfs, so say so
-          # loudly instead of shipping a zip that cannot use the engine.
-          if [ -f tools/mctl ]; then
-            cp tools/mctl assemble-meta/tools/mctl
-            chmod 755 assemble-meta/tools/mctl
-          else
-            echo "::warning::tools/mctl is missing - the metamodule will run script-only (E4 fallback)"
-          fi
-          cd assemble-meta
-          zip -r9 ../kpmmount-${{ env.BUILD_ID }}.zip .
-          cd ..
-          ls -lh kpmmount-*.zip
-
       - name: Upload KPM artifact
         uses: actions/upload-artifact@v4
         with:
           name: susfs_kpm-${{ env.BUILD_ID }}
           path: susfs_kpm.kpm
 
-      - name: Upload mount KPM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mount_kpm-${{ env.BUILD_ID }}
-          path: mount_kpm.kpm
-
       - name: Upload module zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: susfs4ap-kpm-${{ env.BUILD_ID }}
           path: susfs4ap-kpm-*.zip
-
-      - name: Upload metamodule zip artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: kpmmount-metamodule-${{ env.BUILD_ID }}
-          path: kpmmount-*.zip
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4

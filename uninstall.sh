@@ -7,5 +7,6 @@ rm -f /data/adb/ap/bin/ksu_susfs_real
 # If you baked the KPM into the boot image yourself, reflash a non-susfs boot
 # image as well — this line cannot unload a resident module.
 rm -rf /data/adb/ap/kpm/susfs_kpm
-# Remove temp/log directory
+# Remove temp/log directory (current location) and the pre-migration one
 rm -rf /data/adb/ap/susfs4ksu
+rm -rf /data/adb/susfs4ksu

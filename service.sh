@@ -2,7 +2,7 @@
 MODDIR=/data/adb/modules/susfs4ksu
 SUSFS_BIN=/data/adb/ap/bin/ksu_susfs
 . ${MODDIR}/utils.sh
-PERSISTENT_DIR=/data/adb/susfs4ksu
+PERSISTENT_DIR=/data/adb/ap/susfs4ksu
 tmpfolder=/data/adb/ap/susfs4ksu
 logfile1="$tmpfolder/logs/susfs1.log"
 logfile="$tmpfolder/logs/susfs.log"
@@ -151,7 +151,7 @@ check_missing_prop "ro.boot.vbmeta.avb_version" "1.2"
 check_missing_prop "ro.boot.vbmeta.hash_alg" "sha256"
 
 # Extract vbmeta_size from config file, fallback to 8192 if missing.
-vbmeta_size=$(sed -n 's/^vbmeta_size=//p' /data/adb/susfs4ksu/config.sh 2>/dev/null)
+vbmeta_size=$(sed -n 's/^vbmeta_size=//p' /data/adb/ap/susfs4ksu/config.sh 2>/dev/null)
 vbmeta_size=${vbmeta_size:-8192}
 check_missing_prop "ro.boot.vbmeta.size" "$vbmeta_size"
 
@@ -221,7 +221,7 @@ if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_OPEN_REDIRECT"; then
 	done
 fi
 
-# echo "hide_loops=1" >> /data/adb/susfs4ksu/config.sh
+# echo "hide_loops=1" >> /data/adb/ap/susfs4ksu/config.sh
 [ $hide_loops = 1 ] && {
 	echo "susfs4ksu/service: [hide_loops]" >> $logfile1
 	for device in $(ls -Ld /proc/fs/jbd2/loop*8 | sed 's|/proc/fs/jbd2/||; s|-8||'); do
@@ -230,7 +230,7 @@ fi
 	done
 }
 
-# echo "hide_vendor_sepolicy=1" >> /data/adb/susfs4ksu/config.sh
+# echo "hide_vendor_sepolicy=1" >> /data/adb/ap/susfs4ksu/config.sh
 [ $hide_vendor_sepolicy = 1 ] && {
 	echo "susfs4ksu/service: [hide_vendor_sepolicy]" >> $logfile1
 	for sepolicy_cil in \
@@ -250,7 +250,7 @@ fi
 	done
 }
 
-# echo "hide_compat_matrix=1" >> /data/adb/susfs4ksu/config.sh
+# echo "hide_compat_matrix=1" >> /data/adb/ap/susfs4ksu/config.sh
 [ $hide_compat_matrix = 1 ] && {
 	echo "susfs4ksu/service: [hide_compat_matrix] - compatibility_matrix.device.xml" >> $logfile1
 	compatibility_matrix=/system/etc/vintf/compatibility_matrix.device.xml

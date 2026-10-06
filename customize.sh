@@ -56,7 +56,11 @@ susfs4ksu_config_check() {
     if echo "$key_event" | grep -q "KEY_VOLUMEUP"; then
       ui_print "[-] Key Detected: Selected Yes, reset to default"
 	  ui_print "[-] Resetting susfs4ap settings to default..."
-	  rm -rf /data/adb/susfs4ksu
+	  # Wipe both the current location and the pre-migration one, otherwise a
+	  # stale /data/adb/susfs4ksu would be copied back in by the migration
+	  # block below and "reset" would do nothing.
+	  rm -rf /data/adb/ap/susfs4ksu /data/adb/susfs4ksu
+	  SUSFS_RESET_PERFORMED=1
       break
     elif echo "$key_event" | grep -q "KEY_VOLUMEDOWN"; then
       ui_print "[-] Key Detected: Selected No, keep current settings"
@@ -169,14 +173,33 @@ fi
 # set permissions
 chmod 644 ${MODPATH}/post-fs-data.sh ${MODPATH}/post-mount.sh ${MODPATH}/service.sh ${MODPATH}/boot-completed.sh ${MODPATH}/action.sh ${MODPATH}/uninstall.sh ${MODPATH}/susfs-bin-update.sh ${MODPATH}/susfs_reset.sh
 
-# Check if config folder exists
-if [ -d /data/adb/susfs4ksu ]; then
+# The persistent config directory moved from /data/adb/susfs4ksu to
+# /data/adb/ap/susfs4ksu, so that all module state lives under APatch's own
+# tree (/data/adb/ap/...) next to the KPM store and binaries that already
+# write there (kpm_call.h's superkey cache, susfs_diag.txt, the logs dir).
+LEGACY_PERSISTENT_DIR=/data/adb/susfs4ksu
+PERSISTENT_DIR=/data/adb/ap/susfs4ksu
+SUSFS_RESET_PERFORMED=0
+
+# Check if config folder exists (either the current or the pre-migration one)
+if [ -d "$PERSISTENT_DIR" ] || [ -d "$LEGACY_PERSISTENT_DIR" ]; then
 susfs4ksu_config_check
 fi
 
 ui_print "[-] Preparing susfs4ap persistent directory"
-PERSISTENT_DIR=/data/adb/susfs4ksu
-[ ! -d /data/adb/susfs4ksu ] && mkdir -p $PERSISTENT_DIR
+mkdir -p $PERSISTENT_DIR
+if [ "$SUSFS_RESET_PERFORMED" = "0" ] && [ -d "$LEGACY_PERSISTENT_DIR" ]; then
+	# Bring an existing install's settings across so that upgrading the module
+	# does not silently reset every toggle to the shipped default.  Files
+	# already present in the new location win: that directory is the one the
+	# KPM and the userspace binaries write to, so its copies are the live ones.
+	ui_print "[-] Migrating settings: $LEGACY_PERSISTENT_DIR -> $PERSISTENT_DIR"
+	for f in "$LEGACY_PERSISTENT_DIR"/*; do
+		[ -f "$f" ] || continue
+		b=$(basename "$f")
+		[ -e "$PERSISTENT_DIR/$b" ] || cp -f "$f" "$PERSISTENT_DIR/$b"
+	done
+fi
 files="sus_mount.txt try_umount.txt sus_path.txt sus_path_loop.txt sus_maps.txt sus_open_redirect.txt legit_mounts.txt sus_kstat_statically.json config.sh"
 for i in $files ; do
     if [ ! -f $PERSISTENT_DIR/$i ] ; then
@@ -200,10 +223,10 @@ done
 vbmeta_size=$(( 5504 + (RANDOM % 14 + 1)*1024 ))  # 5504~16384
 
 # Data persistence
-if grep -q "^vbmeta_size=" /data/adb/susfs4ksu/config.sh; then
-    sed -i "s/^vbmeta_size=.*/vbmeta_size=$vbmeta_size/" /data/adb/susfs4ksu/config.sh
+if grep -q "^vbmeta_size=" /data/adb/ap/susfs4ksu/config.sh; then
+    sed -i "s/^vbmeta_size=.*/vbmeta_size=$vbmeta_size/" /data/adb/ap/susfs4ksu/config.sh
 else
-    echo "vbmeta_size=$vbmeta_size" >> /data/adb/susfs4ksu/config.sh
+    echo "vbmeta_size=$vbmeta_size" >> /data/adb/ap/susfs4ksu/config.sh
 fi
 
 rm -rf ${MODPATH}/tools

@@ -2,7 +2,7 @@
 MODDIR=/data/adb/modules/susfs4ksu
 SUSFS_BIN=/data/adb/ap/bin/ksu_susfs
 . ${MODDIR}/utils.sh
-PERSISTENT_DIR=/data/adb/susfs4ksu
+PERSISTENT_DIR=/data/adb/ap/susfs4ksu
 tmpfolder=/data/adb/ap/susfs4ksu
 mkdir -p $tmpfolder/logs
 mkdir -p $tmpfolder
@@ -235,7 +235,7 @@ fi
 
 # for people that is on legacy with broken dmesg or disabled logging
 # second, heres your override
-# touch /data/adb/susfs4ksu/susfs_force_override
+# touch /data/adb/ap/susfs4ksu/susfs_force_override
 [ -f $PERSISTENT_DIR/susfs_force_override ] && touch $tmpfolder/logs/susfs_active
 
 force_hide_lsposed=0

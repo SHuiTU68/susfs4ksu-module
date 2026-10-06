@@ -1,9 +1,0 @@
-id=kpmmount
-name=KPM Mount
-version=v0.1.0-P0
-versionCode=100
-metamodule=1
-author=SHuiTU68
-description=Metamodule that owns module mounting for stock APatch. Registers module trees into the mount_kpm engine (VFS/dcache injection, no mounts to hide); falls back to real overlayfs in the global mount namespace when the engine is unavailable. Tap Action, or open the WebUI, for status and a hot apply.
-webuiIcon=kpmmount.png
-actionIcon=kpmmount.png

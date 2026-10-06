@@ -3,7 +3,7 @@ MODDIR=/data/adb/modules/susfs4ksu
 SUSFS_BIN=/data/adb/ap/bin/ksu_susfs
 AP_BIN=/data/adb/ap/bin/apd
 . ${MODDIR}/utils.sh
-PERSISTENT_DIR=/data/adb/susfs4ksu
+PERSISTENT_DIR=/data/adb/ap/susfs4ksu
 tmpfolder=/data/adb/ap/susfs4ksu
 logfile="$tmpfolder/logs/susfs.log"
 logfile1="$tmpfolder/logs/susfs1.log"
@@ -347,7 +347,7 @@ fi
 	done
 }
 
-# echo "hide_gapps=1" >> /data/adb/susfs4ksu/config.sh
+# echo "hide_gapps=1" >> /data/adb/ap/susfs4ksu/config.sh
 # Performance: use -iname with name patterns so find prunes non-matching
 # subtrees instead of stat-ing every file on the partition.
 [ $hide_gapps = 1 ] && {
@@ -358,10 +358,55 @@ fi
 	done
 }
 
-# echo "spoof_cmdline=1" >> /data/adb/susfs4ksu/config.sh
-[ $spoof_cmdline = 1 ] && {
-	echo "susfs4ksu/boot-completed: [spoof_cmdline]" >> $logfile1
-	
+# _sync_androidboot <file> <gki|cmdline>
+# Rewrite every androidboot.<key> line in <file> so it repeats the value of the
+# live ro.boot.<key> property, and append the lock / AVB keys that the module
+# creates as properties but that this kernel never put on the command line.
+# See the caller below for why this is needed.
+_sync_androidboot() {
+	_f=$1
+	_fmt=${2:-gki}
+	[ -f "$_f" ] || return 0
+	for _k in flash.locked warranty_bit vbmeta.device_state vbmeta.size \
+	          vbmeta.digest vbmeta.hash_alg vbmeta.avb_version \
+	          vbmeta.invalidate_on_error verifiedbootstate veritymode; do
+		_p=$(resetprop "ro.boot.${_k}" 2>/dev/null)
+		[ -n "$_p" ] || continue
+		# Match the exact key, so "veritymode" never rewrites "veritymode.managed".
+		if grep -q "androidboot\.${_k}[[:space:]]*=" "$_f"; then
+			if [ "$_fmt" = "gki" ]; then
+				sed -i "s|androidboot\.${_k}[[:space:]]*=[[:space:]]*\"[^\"]*\"|androidboot.${_k} = \"${_p}\"|g" "$_f"
+			else
+				sed -i "s|androidboot\.${_k}=[^ ]*|androidboot.${_k}=${_p}|g" "$_f"
+			fi
+		else
+			if [ "$_fmt" = "gki" ]; then
+				printf 'androidboot.%s = "%s"\n' "$_k" "$_p" >> "$_f"
+			else
+				printf ' androidboot.%s=%s' "$_k" "$_p" >> "$_f"
+			fi
+		fi
+	done
+}
+
+# echo "spoof_cmdline=1" >> /data/adb/ap/susfs4ksu/config.sh
+[ $spoof_cmdline = 1 ] && echo "susfs4ksu/boot-completed: [spoof_cmdline]" >> $logfile1
+# NOTE: this block deliberately runs even when spoof_cmdline=0.
+# service.sh always resets ro.boot.vbmeta.device_state/vendor.boot.*/etc. via
+# resetprop, and those are *userspace* property rewrites: the kernel's own
+# /proc/cmdline and /proc/bootconfig keep the bootloader's original
+# androidboot.* values.  Duck-Detector's bootloader feature ("Boot properties
+# and raw boot parameters") reads the verified-boot / lock / AVB properties
+# through several independent sources - reflection, getprop, native libc, the
+# JVM, /proc/cmdline and /proc/bootconfig - and treats a disagreement between
+# them as evidence of rewriting ("a spoofing module that rewrites properties in
+# one source often misses another").  A device whose getprop says
+# vbmeta.device_state=locked while /proc/bootconfig still says unlocked is
+# exactly the contradiction it looks for, so the two views have to be kept in
+# sync whether or not the cosmetic product-name spoof is enabled.
+if echo "$susfs_features" | grep -q "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG"; then
+	echo "susfs4ksu/boot-completed: [boot view sync]" >> $logfile1
+
 	# Spoof cmdline and bootconfig
 	if grep -q "androidboot.verifiedbootstate" /proc/cmdline; then
 		sed 's|androidboot\.verifiedbootstate=orange|androidboot.verifiedbootstate=green|g' /proc/cmdline > $mntfolder/cmdline
@@ -380,6 +425,14 @@ fi
 			$mntfolder/bootconfig
 	fi
 	
+	# Make every androidboot.<key> that service.sh spoofs as a property agree
+	# with what this file reports.  The resetprop'd values (locked / green /
+	# 1 / 0) are what the property sources return; without this the kernel's
+	# file still carries the bootloader's original "unlocked" / "orange" and
+	# the two sources contradict each other.
+	_sync_androidboot $mntfolder/cmdline cmdline
+	_sync_androidboot $mntfolder/bootconfig gki
+
 	#check for susfs version and use the appropriate method
 	if [ -f $mntfolder/cmdline ]; then
 		if [ -n "$version" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 1 ] && [ "$SUSFS_DECIMAL_SUB" -ge 5 ] && [ "$SUSFS_DECIMAL_PATCH" -ge 4 ] || [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] 2>/dev/null; then
@@ -396,10 +449,9 @@ fi
 			${SUSFS_BIN} set_proc_cmdline $mntfolder/bootconfig
 		fi
 	fi
-	
-}
+fi
 
-# echo "hide_revanced=1" >> /data/adb/susfs4ksu/config.sh
+# echo "hide_revanced=1" >> /data/adb/ap/susfs4ksu/config.sh
 [ $hide_revanced = 1 ] && {
 	echo "susfs4ksu/boot-completed: [hide_revanced]" >> $logfile1
 	count=0 
@@ -527,7 +579,7 @@ echo sus_map=$(grep -ci 'sus_map' $logfile1 ) >> ${tmpfolder}/susfs_stats1.txt
 echo sus_mount=$(grep -ci 'sus_mount' $logfile1 ) >> ${tmpfolder}/susfs_stats1.txt
 echo try_umount=$(grep -ci 'try_umount' $logfile1 ) >> ${tmpfolder}/susfs_stats1.txt
 
-# to add paths: echo "/system/addon.d" >> /data/adb/susfs4ksu/sus_path.txt
+# to add paths: echo "/system/addon.d" >> /data/adb/ap/susfs4ksu/sus_path.txt
 {
 	echo "sus_path=0" >> ${tmpfolder}/susfs_stats.txt
 	# Emulate Vold app data
@@ -570,7 +622,7 @@ echo try_umount=$(grep -ci 'try_umount' $logfile1 ) >> ${tmpfolder}/susfs_stats1
 	fi
 
 	# Add sus_path_loop paths (late v1.5.9+)
-	# to add paths: echo "/system/addon.d" >> /data/adb/susfs4ksu/sus_path_loop.txt
+	# to add paths: echo "/system/addon.d" >> /data/adb/ap/susfs4ksu/sus_path_loop.txt
 	if [ -n "$version" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 1 ] && [ "$SUSFS_DECIMAL_SUB" -ge 5 ] && [ "$SUSFS_DECIMAL_PATCH" -ge 9 ] || [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] 2>/dev/null; then
 		sus_path_loop_count=$(_add_sus_paths "$PERSISTENT_DIR/sus_path_loop.txt" add_sus_path_loop sus_path_loop)
 	fi

@@ -1,5 +1,5 @@
 #!/bin/sh
-config="/data/adb/susfs4ksu"
+config="/data/adb/ap/susfs4ksu"
 
 legit_mounts="/system
 /system_ext
@@ -77,7 +77,7 @@ echo -e "# this contains suspicious mounts you want \n# to be sus_mounted at pos
 # Reset try_umount.txt
 echo -e "# this contains suspicious mounts you want \n# to be try_umounted at post-mount.sh\n# example\n# /system\n# /system_ext\n# /debug_ramdisk" > "$config/try_umount.txt"
 # Reset sus_open_redirect.txt
-echo -e "# this contains paths you want to redirect with\n# open redirect at boot-completed.sh or service.sh\n# example format\n# 0 = Execute on boot-completed.sh\n# 1 = Execute on service.sh\n# <original_path> <redirected_path> <0 or 1>\n# /system/bin/service /data/adb/susfs4ksu/service_redirected 0" > "$config/sus_open_redirect.txt"
+echo -e "# this contains paths you want to redirect with\n# open redirect at boot-completed.sh or service.sh\n# example format\n# 0 = Execute on boot-completed.sh\n# 1 = Execute on service.sh\n# <original_path> <redirected_path> <0 or 1>\n# /system/bin/service /data/adb/ap/susfs4ksu/service_redirected 0" > "$config/sus_open_redirect.txt"
 # Reset legit_mounts.txt
 printf "$legit_mounts" > "$config/legit_mounts.txt"
 # Reset sus_kstat_statically.json
