@@ -18,7 +18,10 @@
  * hand-guessing:
  *
  *   adb shell cp /sys/kernel/btf/vmlinux /sdcard/Download/vmlinux.btf
- *   python3 btf_parse.py vmlinux.btf      # see tools/btf_offsets.py
+ *   python3 tools/btf_offsets.py --btf vmlinux.btf --vfs
+ *
+ * (This used to point at a btf_parse.py that never existed; the tool is
+ * tools/btf_offsets.py, and `--emit-c` writes the defines below for you.)
  *
  * Source of truth used here:
  *   Linux version 6.6.118-android15-8-ge58033dc8ea6-abogki498046332-4k
