@@ -2,15 +2,17 @@
 # customize.sh - runs inside APatch's installer when this metamodule is flashed.
 #
 # Two things get deployed:
-#   1. the engine, as /data/adb/ap/kpm/susfs_kpm/susfs_kpm.kpm.  That path is
-#      KernelPatch's autoload slot: kernel/patch/android/userd.c
+#   1. the *mount* engine, as /data/adb/ap/kpm/mount_kpm/mount_kpm.kpm.  That
+#      path is KernelPatch's autoload slot: kernel/patch/android/userd.c
 #      (load_ap_kpm_modules) scans /data/adb/ap/kpm/<id>/<id>.kpm at
-#      `post-fs-data: before` and loads it, unless <id>/disable exists.  It is
-#      the *same* file the susfs4ksu module deploys, so we only install it when
-#      it is not already there: whichever package is flashed first wins and a
-#      later flash never downgrades the engine.
-#   2. mctl, the userspace client for the engine's command channel, into
-#      /data/adb/kpmmount/bin/mctl.
+#      `post-fs-data: before` and loads it, unless <id>/disable exists.
+#      The mount engine is a package of its own, separate from the security
+#      engine (susfs_kpm.kpm) that the susfs4ksu module deploys: the two load
+#      independently, answer on different command-channel magics
+#      ("SUSFSMNT" vs "SUSFSYSC"), and are versioned separately.  This
+#      metamodule owns and ships mount_kpm and never touches susfs_kpm.
+#   2. mctl, the userspace client for the *mount* engine's command channel,
+#      into /data/adb/kpmmount/bin/mctl.
 #
 # We deliberately do NOT create /data/adb/metamodule: apd does that itself when
 # it installs a metamodule (apd/src/module.rs:501 -> metamodule::ensure_symlink)
@@ -20,7 +22,7 @@
 SKIPUNZIP=0
 
 DATA_DIR=/data/adb/kpmmount
-KPM_ID=susfs_kpm
+KPM_ID=mount_kpm
 KPM_DIR=/data/adb/ap/kpm/${KPM_ID}
 STATE_ENABLE=${DATA_DIR}/enable
 
@@ -29,9 +31,13 @@ ui_print "- KPM Mount (metamodule)"
 mkdir -p "$KPM_DIR" "$DATA_DIR/bin"
 
 # ---- engine ----------------------------------------------------------------
-if [ -f "$KPM_DIR/${KPM_ID}.kpm" ]; then
-	ui_print "- engine already at ${KPM_DIR}/${KPM_ID}.kpm, keeping it"
-elif [ -f "$MODPATH/${KPM_ID}.kpm" ]; then
+# mount_kpm is *this metamodule's* engine: no other package installs
+# /data/adb/ap/kpm/mount_kpm/mount_kpm.kpm, so the copy in this zip is
+# authoritative and is always (re)installed - re-flashing the metamodule is how
+# the mount engine gets upgraded.  (The security engine, susfs_kpm.kpm, is a
+# different file in a different slot, owned by the susfs4ksu module; we do not
+# touch it.)
+if [ -f "$MODPATH/${KPM_ID}.kpm" ]; then
 	cp -f "$MODPATH/${KPM_ID}.kpm" "$KPM_DIR/${KPM_ID}.kpm" &&
 		chmod 644 "$KPM_DIR/${KPM_ID}.kpm" &&
 		ui_print "- engine installed to ${KPM_DIR}/${KPM_ID}.kpm"
@@ -56,6 +62,18 @@ if [ -n "$mctl_src" ]; then
 	ui_print "- installed mctl to ${DATA_DIR}/bin/mctl"
 else
 	ui_print "! mctl not in the zip; the engine will run script-only"
+fi
+
+# ---- WebUI -----------------------------------------------------------------
+# apd serves <module>/webroot/index.html as this metamodule's WebUI.  The page
+# is a thin front-end: every button shells out to action.sh, the same script
+# the APM Action button runs, so there is no mount logic to drift out of sync.
+# It rides along with the rest of the zip (SKIPUNZIP=0), so there is nothing to
+# copy here - we only report whether it actually arrived.
+if [ -f "$MODPATH/webroot/index.html" ]; then
+	ui_print "- WebUI installed (open it from APatch Manager)"
+else
+	ui_print "! webroot/index.html missing from the zip - no WebUI"
 fi
 
 # Enabled by default: flashing the metamodule is the opt-in.

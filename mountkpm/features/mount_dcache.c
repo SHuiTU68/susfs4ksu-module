@@ -12,6 +12,15 @@
  * /proc/mounts are then correct by construction.
  *
  * ---------------------------------------------------------------------------
+ * WHERE THIS FILE LIVES
+ *
+ * It is part of the mount_kpm package (mountkpm/), the KPM that owns mounting,
+ * and of nothing else: susfs_kpm - the security engine - no longer carries the
+ * dcache code or the rules' command codes.  The two engines are separate
+ * packages with separate command magics; mountkpm/include/mount_kpm.h explains
+ * why, and why sharing this file's source between them is still safe.
+ *
+ * ---------------------------------------------------------------------------
  * WHAT THIS FILE IS (and is not) RIGHT NOW
  *
  * The rule store plus its userspace ABI.  Nothing here touches the VFS yet,
@@ -66,7 +75,7 @@
 #include <linux/spinlock.h>
 #include <uapi/asm-generic/errno.h>
 
-#include "../include/susfs_kpm.h"
+#include "../include/mount_kpm.h"
 
 #define HIDE_PTR(p) __asm__("" : "=r"(p) : "0"(p))
 

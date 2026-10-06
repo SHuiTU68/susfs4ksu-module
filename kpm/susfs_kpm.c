@@ -25,8 +25,9 @@
 #include <linux/printk.h>
 #include <linux/string.h>
 #include <linux/stddef.h>
-/* spinlocks: the E7 dcache engine takes one around its rule table, and the
- * out_msg buffer for its listing takes one of its own (see susfs_dc_emit) */
+/* <linux/spinlock.h> for DEFINE_SPINLOCK; the feature sources under
+ * features/ each include their own copy, and this keeps spinlock_t /
+ * raw-spinlock types visible in this translation unit as well. */
 #include <linux/spinlock.h>
 #include <uapi/asm-generic/errno.h>
 #include <kputils.h>
@@ -435,10 +436,6 @@ static long susfs_init(const char *args, const char *event, void *reserved)
     rc |= susfs_set_uname_init_hooks();
     rc |= susfs_set_cmdline_init_hooks();
     rc |= susfs_avc_log_spoofing_init_hooks();
-    /* E7 dcache engine: no hooks yet (slice 1 is the rule store + ABI), but it
-     * is initialised from here so the KPM core never has to change again as the
-     * lookup/dentry and readdir slices land. */
-    rc |= susfs_dc_init();
 
     if (rc) {
         logke("susfs_kpm: one or more hook installations failed (rc=%d), "
@@ -539,10 +536,6 @@ static long susfs_exit(void *reserved)
     susfs_set_uname_cleanup();
     susfs_set_cmdline_cleanup();
     susfs_avc_log_spoofing_cleanup();
-    /* Frees the dcache rule store.  Slice 2+ also has to drop the dentries built
-     * from those rules before the strings behind them go away; that teardown
-     * lives behind susfs_dc_rule_clear() so this stays a single call. */
-    susfs_dc_cleanup();
     return 0;
 }
 
@@ -550,40 +543,6 @@ static long susfs_exit(void *reserved)
 
 /* field accessor — no nested functions in kernel mode */
 #define ARG(i) ((i) < argc ? fields[(i)] : "")
-
-/* ===== out_msg plumbing for the E7 dcache engine =====
- *
- * Its rule listing is the one command whose response cannot use a stack buffer:
- * 16k rules of "virtual=real\n" is around 1 MB, and a kernel stack is 16 KB, so
- * the text is formatted into a single static buffer and copied out under a
- * spinlock.  The lock is needed because the kcmp hook runs in the *caller's*
- * context, so two processes can be inside susfs_ctl0 at the same time; without
- * it the slower one would hand the other's bytes to its own userspace. */
-#define SUSFS_DC_OUTBUFSIZE 65536
-static char susfs_dc_outbuf[SUSFS_DC_OUTBUFSIZE];
-static DEFINE_SPINLOCK(susfs_dc_outbuf_lock);
-
-/* Formatting is done into the shared buffer, so the caller must be holding
- * susfs_dc_outbuf_lock.  Returns whatever fn() returned (a count, or a negative
- * errno) so userspace can tell a complete listing from a truncated one. */
-static long susfs_dc_emit(int (*fn)(char *, int), char *__user out_msg,
-                          int outlen)
-{
-    long rc;
-    int len = 0;
-
-    if (!out_msg || outlen <= 0) return -EINVAL;
-
-    susfs__raw_spin_lock(&susfs_dc_outbuf_lock);
-    rc = fn(susfs_dc_outbuf, SUSFS_DC_OUTBUFSIZE);
-    while (susfs_dc_outbuf[len] && len < SUSFS_DC_OUTBUFSIZE - 1) len++;
-    if (len > 0) {
-        if (len > outlen - 1) len = outlen - 1;
-        compat_copy_to_user(out_msg, susfs_dc_outbuf, len + 1);
-    }
-    susfs__raw_spin_unlock(&susfs_dc_outbuf_lock);
-    return rc;
-}
 
 static long susfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
 {
@@ -721,26 +680,11 @@ static long susfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
         return susfs_set_log_enabled((int)parse_long(ARG(1), 0));
     case CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING:
         return susfs_set_avc_log_spoofing((int)parse_long(ARG(1), 0));
-    /* ===== E7 dcache engine (KPM-only) =====
-     *
-     * The whole rule set is rebuilt from userspace on every boot and on demand
-     * (Action button), so clear-then-add is the normal sequence and both are
-     * cheap: only the string copies happen per rule.  metamount.sh sends the
-     * pairs itself with mctl, so nothing here walks the module set. */
-    case CMD_SUSFS_KPM_DC_RULE_ADD:
-        if (argc < 3) return -EINVAL;
-        return susfs_dc_rule_add(ARG(1), ARG(2));
-    case CMD_SUSFS_KPM_DC_RULE_CLEAR:
-        return susfs_dc_rule_clear();
-    case CMD_SUSFS_KPM_DC_RULE_COUNT:
-        /* The count is the return value, so no out_msg is needed. */
-        return susfs_dc_rule_count();
-    case CMD_SUSFS_KPM_DC_RULE_LIST:
-        return susfs_dc_emit(susfs_dc_rule_list, out_msg, outlen);
-    case CMD_SUSFS_KPM_DC_CAPS:
-        return susfs_dc_emit(susfs_dc_caps, out_msg, outlen);
-    case CMD_SUSFS_KPM_DC_STATUS:
-        return susfs_dc_emit(susfs_dc_status, out_msg, outlen);
+    /* The E7 dcache engine's commands (0x55565-0x5556a) are NOT served here any
+     * more: they belong to the separate mount_kpm package (mountkpm/), which
+     * owns its own command channel magic.  A dcache command that somehow lands
+     * on this engine's channel falls through to the default case and answers
+     * -ENOSYS, which is exactly how userspace tells the two engines apart. */
     case CMD_SUSFS_SHOW_VERSION: {
         char tmp[SUSFS_MAX_VERSION_BUFSIZE];
         int rc2 = susfs_show_version(tmp, sizeof(tmp));

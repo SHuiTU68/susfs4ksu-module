@@ -1,13 +1,10 @@
-/* susfs_kpm.lds — linker script for the susfs_kpm (security engine) KPM.
+/* mount_kpm.lds — linker script for the mount_kpm (dcache engine) KPM.
  *
  * Mirrors AuditPatch-KPM/kpm_audit_patch.lds.  The KernelPatch loader does
  * not apply PLT relocations, so we discard the PLT / init-PLT /
  * ftrace-trampoline sections by marking them NOLOAD with a single padding
  * byte.  The resulting .kpm only carries relocations the in-kernel loader
  * (kernel/patch/module/relo.c) understands.
- *
- * The mount engine (mountkpm/) carries an identical script next to its own
- * sources; the two packages are built independently.
  */
 SECTIONS {
 	.plt (NOLOAD) : { BYTE(0) }

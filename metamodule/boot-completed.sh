@@ -14,7 +14,7 @@ MODDIR=${0%/*}
 DATA_DIR=/data/adb/kpmmount
 LOG="$DATA_DIR/mount.log"
 MCTL="$DATA_DIR/bin/mctl"
-KPM_DIR=/data/adb/ap/kpm/susfs_kpm
+KPM_DIR=/data/adb/ap/kpm/mount_kpm
 
 mkdir -p "$DATA_DIR" 2>/dev/null
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
@@ -36,8 +36,8 @@ if [ ! -f "$DATA_DIR/enable" ]; then
 	log "[state] disabled by $DATA_DIR/enable"
 elif [ -f "$DATA_DIR/disabled_boot" ]; then
 	log "[state] suppressed by the bootloop guard ($DATA_DIR/disabled_boot)"
-elif [ ! -f "$KPM_DIR/susfs_kpm.kpm" ]; then
-	log "[state] no engine at $KPM_DIR/susfs_kpm.kpm -> overlayfs fallback was used"
+elif [ ! -f "$KPM_DIR/mount_kpm.kpm" ]; then
+	log "[state] no engine at $KPM_DIR/mount_kpm.kpm -> overlayfs fallback was used"
 elif [ -f "$KPM_DIR/disable" ]; then
 	log "[state] engine disabled by $KPM_DIR/disable -> overlayfs fallback was used"
 elif [ -x "$MCTL" ]; then

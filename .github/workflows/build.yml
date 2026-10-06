@@ -44,8 +44,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang lld llvm
+          # gcc's aarch64 cross toolchain builds the metamodule's mctl: see the
+          # "Build mctl" step for why it is not built with the NDK clang.
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu
           clang --version
           ld.lld --version
+          aarch64-linux-gnu-gcc --version | head -1
 
       - name: Build susfs_kpm.kpm
         run: |
@@ -58,6 +62,20 @@ jobs:
           echo "=== KPM built ==="
           file build/susfs_kpm.kpm
           cp build/susfs_kpm.kpm ../susfs_kpm.kpm
+
+      - name: Build mount_kpm.kpm
+        run: |
+          # The mount engine is a separate KPM package (dcache rule store) and
+          # is built from its own tree with the exact same toolchain and flags
+          # as the security engine - see mountkpm/Makefile, which shares the
+          # AuditPatch-KPM flag set and only differs in which sources it links.
+          cd mountkpm
+          make clean || true
+          make CC_OVERRIDE="clang --target=aarch64-linux-gnu" \
+               KP_DIR=../KernelPatch -j$(nproc)
+          echo "=== mount KPM built ==="
+          file build/mount_kpm.kpm
+          cp build/mount_kpm.kpm ../mount_kpm.kpm
 
       - name: Setup Android NDK
         id: setup-ndk
@@ -78,20 +96,39 @@ jobs:
 
       - name: Build mctl (metamodule userspace client)
         run: |
-          # mctl is the userspace client for the engine's kcmp command channel.
-          # It has to be a binary: the channel is a *syscall*, and Android's
-          # toybox sh cannot issue one (there is no `syscall` builtin).  Static
-          # so it carries its own libc - the metamodule runs it from
+          # mctl is the userspace client for the mount engine's kcmp command
+          # channel.  It has to be a binary: the channel is a *syscall*, and
+          # Android's toybox sh cannot issue one (there is no `syscall`
+          # builtin).  Static so it carries its own libc - it runs from
           # /data/adb/kpmmount/bin, outside anything the linker could load from.
-          NDKBIN="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          "${NDKBIN}/aarch64-linux-android26-clang" -static -O2 -Wall -Wextra \
+          #
+          # NOT built with aarch64-linux-android26-clang (the NDK) any more.
+          # With lld the resulting PT_TLS segment came out aligned to 8 bytes,
+          # and Bionic refuses to start such an executable:
+          #     executable's TLS segment is underaligned: alignment is 8,
+          #     needs to be at least 64 for ARM64 Bionic
+          # and it aborts before main(), so *every* mctl call in metamount.sh
+          # silently failed (rc=134) and the metamodule was stuck on the
+          # overlayfs path.  tools/mctl.c now also pins a 64-byte-aligned TLS
+          # variable so the segment is correct even under lld, but gcc's
+          # binutils linker is the toolchain this was verified end-to-end with,
+          # so build with it and assert the alignment below.
+          aarch64-linux-gnu-gcc -static -O2 -Wall -Wextra \
             -o tools/mctl tools/mctl.c
           echo "=== mctl built ==="
           file tools/mctl
-          "${NDKBIN}/llvm-strip" --strip-all tools/mctl || true
+          aarch64-linux-gnu-strip --strip-all tools/mctl || true
           ls -l tools/mctl
-        env:
-          NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+          # Fail the build loudly if PT_TLS.p_align is ever below 64 again: a
+          # silently underaligned mctl is worse than no mctl at all, because
+          # the metamodule cannot tell the difference between "engine absent"
+          # and "client aborts".
+          tls_align=$(readelf -lW tools/mctl | awk '/TLS/{print $NF; exit}')
+          echo "mctl PT_TLS alignment: ${tls_align:-<none>}"
+          case "${tls_align:-}" in
+            *0x40*|*64*) : ;;
+            *) echo "::error::mctl TLS segment alignment is '${tls_align:-none}', expected at least 64 (0x40) for ARM64 Bionic"; exit 1 ;;
+          esac
 
       - name: Update version with git HEAD
         run: |
@@ -146,10 +183,20 @@ jobs:
              metamodule/boot-completed.sh metamodule/action.sh metamodule/uninstall.sh \
              assemble-meta/
           chmod 755 assemble-meta/*.sh
-          # Ship the freshly built engine inside the metamodule zip too, so the
-          # metamodule works on an APatch install that never had susfs4ksu (its
-          # customize.sh keeps an existing engine instead of downgrading one).
-          cp susfs_kpm.kpm assemble-meta/susfs_kpm.kpm
+          # WebUI + icon.  apd serves <module>/webroot verbatim; module.prop's
+          # webuiIcon/actionIcon are resolved relative to the module root, which
+          # is why kpmmount.png sits at the top level and not inside webroot/.
+          if [ -d metamodule/webroot ]; then
+            cp -r metamodule/webroot assemble-meta/webroot
+          else
+            echo "::warning::metamodule/webroot is missing - the metamodule ships without a WebUI"
+          fi
+          [ -f metamodule/kpmmount.png ] && cp metamodule/kpmmount.png assemble-meta/kpmmount.png
+          # Ship the freshly built *mount* engine inside the metamodule zip.  This is
+          # the metamodule's own KPM (autoload slot mount_kpm), NOT the security
+          # engine the susfs4ksu zip carries: the two are separate packages that
+          # load from separate slots and answer on different channel magics.
+          cp mount_kpm.kpm assemble-meta/mount_kpm.kpm
           # mctl is the userspace client for the engine's kcmp channel, built by
           # the "Build mctl" step above.  If it ever stops being produced the
           # metamodule silently degrades to script-only overlayfs, so say so
@@ -170,6 +217,12 @@ jobs:
         with:
           name: susfs_kpm-${{ env.BUILD_ID }}
           path: susfs_kpm.kpm
+
+      - name: Upload mount KPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mount_kpm-${{ env.BUILD_ID }}
+          path: mount_kpm.kpm
 
       - name: Upload module zip artifact
         uses: actions/upload-artifact@v4

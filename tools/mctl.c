@@ -45,28 +45,69 @@
  * mounting a file the module wanted gone: that is a correctness bug, not a
  * missing feature.
  */
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
+#include <sys/xattr.h>
 
 #ifndef __NR_kcmp
 #define __NR_kcmp 272 /* arm64; exists on every Android 4.x+ kernel */
 #endif
 
+/* ===== PT_TLS alignment: why this file declares a dummy TLS variable =====
+ *
+ * Bionic refuses to start an aarch64 executable whose PT_TLS segment is aligned
+ * to less than 64 bytes:
+ *
+ *     error: "/data/adb/kpmmount/bin/mctl": executable's TLS segment is
+ *     underaligned: alignment is 8, needs to be at least 64 for ARM64 Bionic
+ *
+ * and it refuses *before* main(), for a static binary too.  The failure is a
+ * build artefact, not a code bug: lld derives PT_TLS.p_align from the alignment
+ * of the .tdata/.tbss sections, and a C program with no TLS variable aligned
+ * above 8 gets p_align=8.  The classic binutils cross-linker did not have this
+ * problem (it used the page size), which is why a locally cross-built binary
+ * ran fine while the CI's NDK/lld one aborted with SIGABRT - and why every
+ * `mctl` call in metamount.sh silently failed, leaving the metamodule stuck on
+ * the overlayfs path (see the mtctl build step in .github/workflows/build.yml,
+ * which now asserts p_align>=64 with readelf).
+ *
+ * One aligned, initialised TLS byte is enough to raise the whole segment's
+ * alignment.  `used` keeps it from being dropped, and initialising it puts it
+ * in .tdata rather than .tbss, so both the compiler and lld see the alignment
+ * on an emitted section. */
+__thread char mctl_tls_align[64] __attribute__((aligned(64), used)) = { 1 };
+
 /* ===== the channel =====
  *
- * Mirror of kpm/susfs_kpm.c.  SUSFS_CMD_MAGIC is the value the hook compares
+ * Mirror of mountkpm/mount_kpm.c.  The magic is the value the hook compares
  * against syscall argument 0, and the sentinel is the opt-in handshake for the
  * 5th argument: the kernel only writes the real return value there when the int
  * it points to already holds the sentinel.  Without it, an old client that
  * passes four arguments would have the kernel poke a stale register value into
  * a random address of its own process.
- */
-#define SUSFS_CMD_MAGIC 0x5355534653595343ULL /* "SUSFSYSC" */
+ *
+ * TWO KPMs, TWO MAGICS
+ *
+ * The mount engine (mount_kpm.kpm) and the security engine (susfs_kpm.kpm) are
+ * separate packages that hook the same syscall, each claiming only its own
+ * magic.  A shared magic would make the two hooks race for every command: the
+ * first hook to run would answer whatever the other one was addressed, and the
+ * engine that was not asked would have to guess from the command number.  One
+ * magic per engine means kcmp() calls for one engine fall through the other
+ * hook untouched, and either KPM can be absent without affecting the other.
+ * susfs_kpm keeps "SUSFSYSC" (that table is the susfs ABI and stock ksu_susfs
+ * speaks it); everything mctl sends uses the mount engine's magic below. */
+#define MOUNT_CMD_MAGIC 0x53555346534D4E54ULL /* "SUSFSMNT" */
 #define SUSFS_RC_SENTINEL 0x7fffffff
 
 /* Command codes - mirror of kpm/include/susfs_kpm.h.  Only what this client
@@ -98,6 +139,7 @@
 #define EX_USAGE 2
 #define EX_UNSUPPORTED 3
 #define EX_TRUNCATED 4
+#define EX_OVER_CAP 6 /* stage: the tree does not fit in the caller's budget */
 
 static const char *progname = "mctl";
 
@@ -129,10 +171,19 @@ static void usage(FILE *out)
         "  rule clear           drop every rule\n"
         "  rule count           number of installed rules\n"
         "  rule list            'virtual=real' per line\n"
+        "  stage [--cap-kb N] <src-dir> <dst-dir>\n"
+        "                       mirror a module tree into the staging tmpfs (used\n"
+        "                       by the overlayfs fallback, E4): directories are\n"
+        "                       recreated, whiteouts become 0:0 char devices,\n"
+        "                       .replace becomes an opaque directory and every\n"
+        "                       file keeps its mode/owner/SELinux label.  Prints\n"
+        "                       staged_kib=<n> on stdout\n"
         "  raw <CMD_HEX> [args...]\n"
         "                       send a raw command (debugging)\n"
         "\n"
-        "exit: 0 ok, 1 no channel/failed, 2 usage, 3 unsupported, 4 truncated\n");
+        "exit: 0 ok, 1 no channel/failed, 2 usage, 3 unsupported, 4 truncated,\n"
+        "      5 stage: partial (some entries were refused)\n"
+        "      6 stage: over --cap-kb (dst removed, nothing staged)\n");
 }
 
 /* ===== channel plumbing ===== */
@@ -151,7 +202,7 @@ static int kpm_send(const char *cmd, char *out, size_t outlen, long *rcp)
 
     if (out && outlen) out[0] = '\0';
 
-    ret = syscall(__NR_kcmp, (long)SUSFS_CMD_MAGIC, (long)cmd,
+    ret = syscall(__NR_kcmp, (long)MOUNT_CMD_MAGIC, (long)cmd,
                   (long)(out ? out : ""), (long)outlen, (long)&rc_out);
 
     if (rc_out != SUSFS_RC_SENTINEL) {
@@ -167,9 +218,11 @@ static int kpm_send(const char *cmd, char *out, size_t outlen, long *rcp)
 
 static void no_channel(void)
 {
-    fprintf(stderr, "%s: no reply from the susfs_kpm command channel\n",
+    fprintf(stderr, "%s: no reply from the mount engine's command channel\n",
             progname);
-    fprintf(stderr, "%s: is susfs_kpm loaded (and new enough to have it)?\n",
+    fprintf(stderr,
+            "%s: is mount_kpm loaded from /data/adb/ap/kpm/mount_kpm/ and new "
+            "enough to have it?\n",
             progname);
 }
 
@@ -486,6 +539,364 @@ static int cmd_raw(int argc, char **argv)
     return rc < 0 ? EX_FAIL : EX_OK;
 }
 
+/* ===== stage: mirror a module tree into the staging tmpfs (for E4) =====
+ *
+ * WHY A C TOOL AND NOT `cp -a`
+ *
+ * The overlayfs fallback cannot point lowerdir at the module trees any more
+ * (see the long note in metamodule/metamount.sh): /data is f2fs with the
+ * casefold feature, and overlayfs rejects *any* layer - lower or upper - on a
+ * superblock that allows case-insensitive dentries, which is upstream commit
+ * "ovl: Always reject mounting over case-insensitive filesystems" and is in
+ * every 6.6 stable from 6.8.y on.  The trees therefore have to be staged onto
+ * a filesystem overlayfs accepts (a tmpfs), and the staging has to be exact:
+ *
+ *   - SELinux labels must survive.  toybox `cp -a` does not copy xattrs, so a
+ *     staged copy comes out as u:object_r:tmpfs:s0 and every app that reads
+ *     through the overlay gets a denial.  Here each entry's security.* xattrs
+ *     are copied explicitly.
+ *   - whiteouts must survive: a module deletes a file from the real partition
+ *     by shipping a 0:0 char device, and only mknod can recreate one.
+ *   - .replace must survive: that is an opaque directory in overlayfs terms.
+ *   - a tree that does not fit in the tmpfs budget must be refused *before*
+ *     the RAM is gone, and must leave nothing behind.
+ *
+ * The cap is passed in by metamount.sh (--cap-kb), which tracks the whole
+ * staging area's budget across modules; on overflow this tool removes what it
+ * copied and exits 6, so the caller can log which module was skipped instead
+ * of filling the tmpfs and taking the boot down. */
+
+#define STAGE_BUF 65536
+
+struct stage_stats {
+    unsigned long long bytes;
+    unsigned long files, dirs, links, nodes, xattrs, failed;
+};
+
+static struct stage_stats st;
+static long long stage_cap_kb = -1; /* <0: no budget */
+static int stage_over_cap;
+
+static void copy_xattrs(const char *src, const char *dst)
+{
+    char names[8192];
+    char val[1024];
+    ssize_t n, i = 0;
+
+    n = llistxattr(src, names, sizeof(names));
+    if (n <= 0) return;
+
+    while (i < n) {
+        const char *nm = names + i;
+        size_t nl = strlen(nm);
+        ssize_t vl;
+
+        i += (ssize_t)nl + 1;
+        if (nl == 0) continue;
+        /* trusted.overlay.* belongs to the overlay the *source* tree might be
+         * part of; copying it would make the staged directory look opaque to
+         * the overlay we are about to build. */
+        if (strncmp(nm, "trusted.overlay.", 16) == 0) continue;
+        if (strncmp(nm, "user.overlay.", 13) == 0) continue;
+
+        vl = lgetxattr(src, nm, val, sizeof(val));
+        if (vl < 0) continue;
+        /* security.selinux is the one value whose terminating NUL is part of
+         * what the kernel expects back; other namespaces are raw bytes. */
+        if (strcmp(nm, "security.selinux") == 0 && vl >= 0 &&
+            vl + 1 < (ssize_t)sizeof(val) &&
+            (vl == 0 || val[vl - 1] != '\0')) {
+            val[vl++] = '\0';
+        }
+        if (lsetxattr(dst, nm, val, (size_t)vl, 0) == 0)
+            st.xattrs++;
+    }
+}
+
+static int remove_tree(const char *path)
+{
+    struct stat sb;
+    DIR *d;
+    struct dirent *de;
+    int rc = 0;
+
+    if (lstat(path, &sb) != 0) return errno == ENOENT ? 0 : -1;
+
+    if (S_ISDIR(sb.st_mode)) {
+        d = opendir(path);
+        if (d) {
+            while ((de = readdir(d)) != NULL) {
+                char *sub;
+                size_t n;
+
+                if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
+                    continue;
+                n = strlen(path) + strlen(de->d_name) + 2;
+                sub = malloc(n);
+                if (!sub) { rc = -1; break; }
+                snprintf(sub, n, "%s/%s", path, de->d_name);
+                remove_tree(sub);
+                free(sub);
+            }
+            closedir(d);
+        }
+        if (rmdir(path) != 0 && errno != ENOENT) rc = -1;
+    } else if (unlink(path) != 0 && errno != ENOENT) {
+        rc = -1;
+    }
+    return rc;
+}
+
+static void copy_times(const char *dst, const struct stat *sb)
+{
+    struct timespec ts[2];
+
+    ts[0] = sb->st_atim;
+    ts[1] = sb->st_mtim;
+    utimensat(AT_FDCWD, dst, ts, AT_SYMLINK_NOFOLLOW);
+}
+
+/* Returns 0, -1 on a skipped entry, or -2 when the budget ran out. */
+static int stage_entry(const char *src, const char *dst)
+{
+    struct stat sb;
+
+    if (lstat(src, &sb) != 0) {
+        warn("stage: lstat(%s): %s", src, strerror(errno));
+        st.failed++;
+        return -1;
+    }
+
+    if (S_ISDIR(sb.st_mode)) {
+        DIR *d;
+        struct dirent *de;
+
+        if (mkdir(dst, (mode_t)(sb.st_mode & 07777)) != 0 && errno != EEXIST) {
+            warn("stage: mkdir(%s): %s", dst, strerror(errno));
+            st.failed++;
+            return -1;
+        }
+        if (lchown(dst, sb.st_uid, sb.st_gid) != 0) { } /* ownership of the copied tree is best effort */
+        chmod(dst, (mode_t)(sb.st_mode & 07777));
+        copy_xattrs(src, dst);
+        copy_times(dst, &sb);
+        st.dirs++;
+
+        d = opendir(src);
+        if (!d) {
+            warn("stage: opendir(%s): %s", src, strerror(errno));
+            st.failed++;
+            return -1;
+        }
+        while ((de = readdir(d)) != NULL) {
+            char *ss, *dd;
+            size_t n;
+
+            if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
+                continue;
+            /* APatch's opaque marker.  Overlayfs spells that "opaque" and
+             * reads user.overlay.* when the mount is made with userxattr
+             * (ours is), trusted.overlay.* otherwise - set both so the marker
+             * works either way. */
+            if (!strcmp(de->d_name, ".replace")) {
+                if (lsetxattr(dst, "user.overlay.opaque", "y", 1, 0) != 0 &&
+                    lsetxattr(dst, "trusted.overlay.opaque", "y", 1, 0) != 0)
+                    warn("stage: %s: .replace seen but the opaque xattr could "
+                         "not be set (%s); the real directory's entries will "
+                         "still be visible", src, strerror(errno));
+                continue;
+            }
+
+            n = strlen(src) + strlen(de->d_name) + 2;
+            ss = malloc(n);
+            dd = malloc(n);
+            if (!ss || !dd) {
+                free(ss);
+                free(dd);
+                warn("stage: out of memory");
+                st.failed++;
+                continue;
+            }
+            snprintf(ss, n, "%s/%s", src, de->d_name);
+            snprintf(dd, n, "%s/%s", dst, de->d_name);
+            {
+                int rc = stage_entry(ss, dd);
+
+                free(ss);
+                free(dd);
+                if (rc == -2) {
+                    closedir(d);
+                    return -2;
+                }
+            }
+        }
+        closedir(d);
+        return 0;
+    }
+
+    if (S_ISREG(sb.st_mode)) {
+        int in, out;
+        ssize_t n;
+        char buf[STAGE_BUF];
+
+        in = open(src, O_RDONLY | O_NOFOLLOW);
+        if (in < 0) {
+            warn("stage: open(%s): %s", src, strerror(errno));
+            st.failed++;
+            return -1;
+        }
+        out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW,
+                   (mode_t)(sb.st_mode & 07777));
+        if (out < 0) {
+            warn("stage: create(%s): %s", dst, strerror(errno));
+            close(in);
+            st.failed++;
+            return -1;
+        }
+        while ((n = read(in, buf, sizeof(buf))) > 0) {
+            ssize_t off = 0;
+
+            st.bytes += (unsigned long long)n;
+            if (stage_cap_kb >= 0 &&
+                st.bytes > (unsigned long long)stage_cap_kb * 1024ULL) {
+                close(in);
+                close(out);
+                stage_over_cap = 1;
+                return -2;
+            }
+            while (off < n) {
+                ssize_t w = write(out, buf + off, (size_t)(n - off));
+
+                if (w <= 0) {
+                    if (w < 0 && errno == EINTR) continue;
+                    warn("stage: write(%s): %s", dst, strerror(errno));
+                    st.failed++;
+                    close(in);
+                    close(out);
+                    return -1;
+                }
+                off += w;
+            }
+        }
+        if (n < 0) warn("stage: read(%s): %s", src, strerror(errno));
+        close(in);
+        if (close(out) != 0)
+            warn("stage: close(%s): %s", dst, strerror(errno));
+
+        if (lchown(dst, sb.st_uid, sb.st_gid) != 0) { } /* ownership of the copied tree is best effort */
+        chmod(dst, (mode_t)(sb.st_mode & 07777));
+        copy_xattrs(src, dst);
+        copy_times(dst, &sb);
+        st.files++;
+        return 0;
+    }
+
+    if (S_ISLNK(sb.st_mode)) {
+        char target[4096];
+        ssize_t n = readlink(src, target, sizeof(target) - 1);
+
+        if (n < 0) {
+            warn("stage: readlink(%s): %s", src, strerror(errno));
+            st.failed++;
+            return -1;
+        }
+        target[n] = '\0';
+        if (symlink(target, dst) != 0) {
+            warn("stage: symlink(%s): %s", dst, strerror(errno));
+            st.failed++;
+            return -1;
+        }
+        if (lchown(dst, sb.st_uid, sb.st_gid) != 0) { } /* ownership of the copied tree is best effort */
+        copy_xattrs(src, dst);
+        st.links++;
+        return 0;
+    }
+
+    if (S_ISCHR(sb.st_mode) || S_ISBLK(sb.st_mode) || S_ISFIFO(sb.st_mode) ||
+        S_ISSOCK(sb.st_mode)) {
+        /* A whiteout is a 0:0 char device; anything else is passed through so
+         * the merged view matches what the module asked for. */
+        if (mknod(dst, sb.st_mode, sb.st_rdev) != 0) {
+            if (S_ISCHR(sb.st_mode) && sb.st_rdev == 0) {
+                warn("stage: mknod(%s) failed (%s): the module's whiteout for "
+                     "this path cannot be represented, the real file will "
+                     "still be visible", dst, strerror(errno));
+            } else {
+                warn("stage: mknod(%s): %s", dst, strerror(errno));
+            }
+            st.failed++;
+            return -1;
+        }
+        if (lchown(dst, sb.st_uid, sb.st_gid) != 0) { } /* ownership of the copied tree is best effort */
+        chmod(dst, (mode_t)(sb.st_mode & 07777));
+        copy_xattrs(src, dst);
+        copy_times(dst, &sb);
+        st.nodes++;
+        return 0;
+    }
+
+    warn("stage: %s: unsupported file type, skipped", src);
+    st.failed++;
+    return -1;
+}
+
+static int cmd_stage(int argc, char **argv)
+{
+    const char *src = NULL, *dst = NULL;
+    int i, rc;
+
+    for (i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--cap-kb") == 0) {
+            if (i + 1 >= argc) {
+                warn("--cap-kb needs a value");
+                return EX_USAGE;
+            }
+            stage_cap_kb = atoll(argv[++i]);
+            if (stage_cap_kb < 0) {
+                warn("--cap-kb must not be negative");
+                return EX_USAGE;
+            }
+            continue;
+        }
+        if (!src) { src = argv[i]; continue; }
+        if (!dst) { dst = argv[i]; continue; }
+        warn("unexpected argument: %s", argv[i]);
+        return EX_USAGE;
+    }
+    if (!src || !dst) {
+        warn("stage needs <src-dir> <dst-dir>");
+        return EX_USAGE;
+    }
+    /* The tool replaces dst, so refuse anything that is obviously not a
+     * staging path: a mistake here deletes a system directory. */
+    if (dst[0] != '/' || strlen(dst) < 5 || !strcmp(dst, "/data") ||
+        !strcmp(dst, "/data/adb")) {
+        warn("refusing to stage into %s", dst);
+        return EX_USAGE;
+    }
+
+    remove_tree(dst);
+    rc = stage_entry(src, dst);
+
+    if (rc == -2 || stage_over_cap) {
+        remove_tree(dst);
+        fprintf(stderr, "staged_cap_exceeded\n");
+        warn("staging %s would exceed the budget (%lld KiB): removed, nothing "
+             "staged", src, stage_cap_kb);
+        return EX_OVER_CAP;
+    }
+
+    /* The caller parses this one line; everything else goes to stderr so the
+     * mount log keeps the detail. */
+    printf("staged_kib=%llu\n", (st.bytes + 1023ULL) / 1024ULL);
+    warn("staged %s -> %s: %llu KiB, %lu file(s), %lu dir(s), %lu link(s), "
+         "%lu node(s), %lu xattr(s), %lu refused",
+         src, dst, (st.bytes + 1023ULL) / 1024ULL, st.files, st.dirs, st.links,
+         st.nodes, st.xattrs, st.failed);
+
+    return st.failed ? 5 : EX_OK;
+}
+
 int main(int argc, char **argv)
 {
     const char *cmd;
@@ -507,6 +918,7 @@ int main(int argc, char **argv)
     if (strcmp(cmd, "caps") == 0) return cmd_caps();
     if (strcmp(cmd, "status") == 0) return cmd_status();
     if (strcmp(cmd, "raw") == 0) return cmd_raw(argc, argv);
+    if (strcmp(cmd, "stage") == 0) return cmd_stage(argc, argv);
     if (strcmp(cmd, "rule") == 0) {
         const char *sub = argc >= 1 ? argv[0] : "";
 

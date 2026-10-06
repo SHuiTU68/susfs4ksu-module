@@ -41,14 +41,14 @@ ENABLE_FILE="$DATA_DIR/enable"
 FORCE_E4_FILE="$DATA_DIR/force_e4"
 DISABLED_BOOT_FILE="$DATA_DIR/disabled_boot"
 BOOT_MARK="$DATA_DIR/.booting"
-KPM_DIR=/data/adb/ap/kpm/susfs_kpm
+KPM_DIR=/data/adb/ap/kpm/mount_kpm
 METAMOUNT="$MODDIR/metamount.sh"
 
 mkdir -p "$DATA_DIR" 2>/dev/null
 say() { echo "$*"; echo "$(date '+%F %T') [action] $*" >> "$LOG"; }
 
 engine_ready() {
-	[ -f "$KPM_DIR/susfs_kpm.kpm" ] || return 1
+	[ -f "$KPM_DIR/mount_kpm.kpm" ] || return 1
 	[ -f "$KPM_DIR/disable" ] && return 1
 	[ -x "$MCTL" ] || return 1
 	"$MCTL" version >/dev/null 2>&1 || return 1
@@ -97,8 +97,8 @@ show_status() {
 		echo "guard    : idle"
 	fi
 
-	if [ ! -f "$KPM_DIR/susfs_kpm.kpm" ]; then
-		echo "kpm      : missing (${KPM_DIR}/susfs_kpm.kpm)"
+	if [ ! -f "$KPM_DIR/mount_kpm.kpm" ]; then
+		echo "kpm      : missing (${KPM_DIR}/mount_kpm.kpm)"
 	elif [ -f "$KPM_DIR/disable" ]; then
 		echo "kpm      : disabled by marker"
 	else

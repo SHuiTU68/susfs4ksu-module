@@ -9,7 +9,7 @@
 #
 # Two engines, in order of preference:
 #
-#   E7  the susfs_kpm dcache engine.  Hand it the module trees and it
+#   E7  the mount_kpm dcache engine.  Hand it the module trees and it
 #       synthesises dentry+inode pairs on the target superblocks.  Nothing gets
 #       mounted, so there is nothing to hide: /proc/mounts is untouched and
 #       st_dev stays the real partition's.
@@ -41,7 +41,13 @@ META_ID="${AP_MODULE:-kpmmount}"
 DATA_DIR=/data/adb/kpmmount
 LOG="$DATA_DIR/mount.log"
 MCTL="$DATA_DIR/bin/mctl"
-KPM_ID=susfs_kpm
+# The MOUNT engine is its own KPM package: /data/adb/ap/kpm/<id>/<id>.kpm is
+# the autoload slot KernelPatch scans at post-fs-data, and mount_kpm.kpm is a
+# different package from the security engine (susfs_kpm.kpm).  The two load
+# independently and answer on different channel magics, so neither one's
+# presence, version or capabilities constrain the other.  Everything below
+# talks to the mount engine: it is the one that owns the dcache rule store.
+KPM_ID=mount_kpm
 KPM_FILE="/data/adb/ap/kpm/$KPM_ID/$KPM_ID.kpm"
 KPM_DISABLE="/data/adb/ap/kpm/$KPM_ID/disable"
 ENABLE_FILE="$DATA_DIR/enable"
@@ -180,6 +186,48 @@ inject_e7() {
 }
 
 # --- E4: real overlayfs, in the namespace everyone inherits ----------------
+#
+# WHY THE MODULE TREES HAVE TO BE STAGED FIRST
+#
+# The direct route - lowerdir=<module tree>:/$p - no longer works on this
+# device, and neither does any variant that keeps a module tree as a layer:
+#
+#   * /data is f2fs with the casefold feature, and overlayfs rejects *every*
+#     layer (lower or upper) whose superblock allows case-insensitive dentries.
+#     That is upstream "ovl: Always reject mounting over case-insensitive
+#     filesystems" (in every 6.6 stable from 6.6.8.y on), and it is what shows
+#     up as `overlay: case-insensitive capable filesystem on ... not supported`
+#     followed by EINVAL.  The module trees live under /data/adb/modules, so no
+#     amount of option tweaking avoids it.
+#   * the mount ALSO has to carry `userxattr`: without it overlayfs tries to set
+#     trusted.overlay.* on the upper, which needs CAP_SYS_ADMIN in the initial
+#     *user* namespace (we are in the global *mount* namespace but not the
+#     initial user namespace), and the mount fails with EINVAL as well.
+#
+# So each module tree is copied onto a tmpfs - which overlayfs accepts - before
+# it is used as a lowerdir, and the copy is exact: mctl stage reproduces modes,
+# owners, symlinks, whiteouts (0:0 char devices) and, crucially, the SELinux
+# labels.  A plain `cp -a` would leave every staged file labelled tmpfs:s0, and
+# every read through the overlay would be denied.
+#
+# BUDGET
+#
+# The staging tmpfs is RAM, so it is capped: each tree is staged with the
+# *remaining* budget and a tree that does not fit is skipped (and logged)
+# instead of filling the tmpfs and taking the boot down.  The default, 1 GiB,
+# fits the reference device's ~975 MB module set; smaller devices can set
+# KPM_E4_CAP_KB (KiB) or drop a number into $DATA_DIR/e4_cap_kb.
+E4_CAP_KB_FILE="$DATA_DIR/e4_cap_kb"
+e4_cap_kb() {
+	if [ -f "$E4_CAP_KB_FILE" ]; then
+		cat "$E4_CAP_KB_FILE" 2>/dev/null
+	elif [ -n "${KPM_E4_CAP_KB:-}" ]; then
+		echo "$KPM_E4_CAP_KB"
+	else
+		echo 1048576
+	fi
+}
+
 mount_e4() {
 	if [ "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/1/ns/mnt)" ]; then
 		# `mount` here would land in apd's private namespace and nobody would
@@ -197,25 +245,65 @@ mount_e4() {
 		fi
 		log "[e4] ERROR: not in the global mount namespace and no nsenter"
 	fi
+
+	e4_cap_kb_val=$(e4_cap_kb)
+	stage_root="$DATA_DIR/rw/stage"
+
 	mkdir -p "$DATA_DIR/rw"
-	grep -q " $DATA_DIR/rw " /proc/mounts || mount -t tmpfs -o mode=0755 tmpfs "$DATA_DIR/rw" || log "[e4] tmpfs failed"
+	if ! grep -q " $DATA_DIR/rw " /proc/mounts; then
+		# size= leaves headroom over the copy budget for the overlay's
+		# upper/work directories, which live on this same tmpfs.  Rounded to MiB.
+		tmpfs_mib=$(( (e4_cap_kb_val + 1023) / 1024 + 64 ))
+		mount -t tmpfs -o "mode=0755,size=${tmpfs_mib}m" tmpfs "$DATA_DIR/rw" ||
+			log "[e4] tmpfs mount failed"
+	fi
+	rm -rf "$stage_root"
+	mkdir -p "$stage_root"
+
+	# ---- 1. stage every module tree (exact copy) onto the tmpfs ----
+	remaining_kb=$e4_cap_kb_val
+	for m in $(active_modules); do
+		id="${m##*/}"
+		for p in $TARGET_PARTITIONS; do
+			[ -d "$m/$p" ] || continue
+			dst="$stage_root/$id/$p"
+			mkdir -p "$(dirname "$dst")" 2>/dev/null
+			if staged=$("$MCTL" stage --cap-kb "$remaining_kb" "$m/$p" "$dst" 2>>"$LOG"); then
+				used=$(echo "$staged" | sed -n 's/^staged_kib=//p' | head -n 1)
+				[ -n "$used" ] || used=0
+				remaining_kb=$((remaining_kb - used))
+				[ "$remaining_kb" -lt 0 ] && remaining_kb=0
+				log "[e4] staged $id/$p (${used} KiB, ${remaining_kb} KiB left)"
+			else
+				rc=$?
+				log "[e4] stage $id/$p failed (rc=$rc) - module skipped"
+				rm -rf "$stage_root/$id" 2>/dev/null
+			fi
+		done
+	done
+
+	# ---- 2. one overlay per partition; lowers = staged trees, then the real one ----
 	for p in $TARGET_PARTITIONS; do
 		[ -d "/$p" ] || continue
 		lowers=""
-		for m in $(active_modules); do
-			[ -d "$m/$p" ] && lowers="$lowers:$m/$p"
+		for d in "$stage_root"/*/"$p"; do
+			[ -d "$d" ] || continue
+			lowers="$lowers:$d"
 		done
 		[ -n "$lowers" ] || continue
 		mkdir -p "$DATA_DIR/rw/$p/upper" "$DATA_DIR/rw/$p/work"
-		# In overlayfs the left-most lowerdir is the top one, so module trees
-		# have to come before the real partition.
+		# In overlayfs the left-most lowerdir is the top one, so the staged
+		# module trees have to come before the real partition.  userxattr is
+		# mandatory (see the note above); redirect_dir=nofollow keeps overlayfs
+		# from rewriting a rename across the layers.
 		if mount -t overlay overlay \
-			-o "lowerdir=${lowers#:}:/$p,upperdir=$DATA_DIR/rw/$p/upper,workdir=$DATA_DIR/rw/$p/work" "/$p"; then
+			-o "lowerdir=${lowers#:}:/$p,upperdir=$DATA_DIR/rw/$p/upper,workdir=$DATA_DIR/rw/$p/work,userxattr,redirect_dir=nofollow" "/$p"; then
 			log "[e4] overlay on /$p lowers=${lowers#:}"
 		else
 			log "[e4] overlay FAILED on /$p"
 		fi
 	done
+	unset id p dst d lowers e4_cap_kb_val remaining_kb used staged rc 2>/dev/null
 }
 
 # Engine choice: an explicit request wins, then the engine if it is usable,

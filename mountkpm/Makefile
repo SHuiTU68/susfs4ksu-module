@@ -1,16 +1,21 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# Build the susfs_kpm KernelPatch Module.
+# Build the mount_kpm KernelPatch Module (the module-mounting engine).
 # Targets android15-6.6 GKI kernel, arm64 only.
 #
+# This is the *second* KPM package in this repository.  susfs_kpm (in ../kpm)
+# is the security engine; this one owns the mount half, i.e. the E7 dcache rule
+# store that features/mount_dcache.c implements.  They are built and loaded
+# independently - see mountkpm/include/mount_kpm.h for why.
+#
 # The build mirrors the verified-working AuditPatch-KPM project
-# (https://github.com/brunoanc/AuditPatch-KPM): same compiler flags, the
-# same linker script that drops .plt / .init.plt / .text.ftrace_trampoline,
-# and the same post-link strip pass.  These three pieces together ensure the
-# final .kpm only contains relocation types the KernelPatch in-kernel loader
-# (kernel/patch/module/relo.c) knows how to apply — in particular NO
-# R_AARCH64_ADR_GOT / R_AARCH64_LD64_GOT, which the loader silently rejects
-# and which manifest at runtime as "KPM load failed".
+# (https://github.com/brunoanc/AuditPatch-KPM) and the susfs_kpm Makefile: same
+# compiler flags, the same linker script that drops .plt / .init.plt /
+# .text.ftrace_trampoline, and the same post-link strip pass.  These three
+# pieces together ensure the final .kpm only contains relocation types the
+# KernelPatch in-kernel loader (kernel/patch/module/relo.c) knows how to apply —
+# in particular NO R_AARCH64_ADR_GOT / R_AARCH64_LD64_GOT, which the loader
+# silently rejects and which manifest at runtime as "KPM load failed".
 
 ifndef TARGET_COMPILE
     # Default to the NDK clang triple used by AuditPatch-KPM.  When invoked
@@ -62,7 +67,10 @@ INCLUDE_FLAGS := $(foreach dir,$(INCLUDE_DIRS),-I$(dir))
 #   -fno-semantic-interposition    : with -fno-PIC lets clang fold inter-TU
 #                                    symbol refs to direct accesses.
 #   -fvisibility=hidden            : default-hide non-exported symbols so no
-#                                    GOT entry is needed for them.
+#                                    GOT entry is needed for them.  It also
+#                                    keeps this KPM's susfs_* kfunc pointers
+#                                    module-local, which is what lets susfs_kpm
+#                                    define the same names (see the header).
 #   -fno-common -U_FORTIFY_SOURCE -fno-stack-protector
 #                                   : match kernel-style codegen, avoid extra
 #                                    sections / calls that generate more
@@ -92,25 +100,19 @@ COMMON_CFLAGS := $(CFLAGS) $(INCLUDE_FLAGS) -c -O2 \
 LDFLAGS += -s
 
 # Linker script: force .plt / .init.plt / .text.ftrace_trampoline to NOLOAD
-# (one byte each) so the final .kpm carries no PLT relocations.  Same script
-# as AuditPatch-KPM/kpm_audit_patch.lds.
-KPM_LDS := susfs_kpm.lds
+# (one byte each) so the final .kpm carries no PLT relocations.
+KPM_LDS := mount_kpm.lds
 
+# Deliberately short: the mount engine is the dcache rule store and, as the
+# later slices land, the VFS half of it.  Everything susfs-related stays in
+# ../kpm.
 KPM_SRCS := \
-    susfs_kpm.c \
-    features/sus_path.c \
-    features/open_redirect.c \
-    features/sus_mount.c \
-    features/sus_kstat.c \
-    features/sus_map.c \
-    features/set_uname.c \
-    features/set_cmdline.c \
-    features/flags.c \
-    features/show.c
+    mount_kpm.c \
+    features/mount_dcache.c
 
 KPM_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(KPM_SRCS))
 
-all: $(BUILD_DIR)/susfs_kpm.kpm
+all: $(BUILD_DIR)/mount_kpm.kpm
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -122,7 +124,7 @@ $(BUILD_DIR)/features: | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR) $(BUILD_DIR)/features
 	${CC} $(COMMON_CFLAGS) -o $@ $<
 
-$(BUILD_DIR)/susfs_kpm.kpm: $(KPM_OBJS) $(KPM_LDS)
+$(BUILD_DIR)/mount_kpm.kpm: $(KPM_OBJS) $(KPM_LDS)
 	${CC} $(LDFLAGS) -T$(KPM_LDS) -r -o $@ $(KPM_OBJS)
 	# Strip debugging / non-needed symbols and the comment / GNU-stack
 	# sections, exactly like AuditPatch-KPM.  Keep .symtab minimally so the
