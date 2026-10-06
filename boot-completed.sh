@@ -554,6 +554,21 @@ echo try_umount=$(grep -ci 'try_umount' $logfile1 ) >> ${tmpfolder}/susfs_stats1
 
 	sus_path_count=$(_add_sus_paths "$PERSISTENT_DIR/sus_path.txt" add_sus_path sus_path)
 
+	# Duck-Detector shared-storage counter-measure (sus_path_duck.txt).
+	# The probe (SharedStorageProbes) enumerates /sdcard/Android/{data,obb}
+	# through a path carrying an inserted zero-width space or ignorable code
+	# point, which slips past the FUSE path check and leaks package names
+	# HMA hides from PackageManager ("HMA mismatch").  Those variants are
+	# never used by a legitimate app, so registering them makes the probe's
+	# openat() return -ENOENT.  The file ships with the module and is
+	# auto-generated; _add_sus_paths skips its "#" header and blank lines.
+	sus_path_duck_count=0
+	if [ -f "$MODDIR/sus_path_duck.txt" ]; then
+		sus_path_duck_count=$(_add_sus_paths "$MODDIR/sus_path_duck.txt" add_sus_path sus_path_duck)
+		sus_path_count=$((sus_path_count + sus_path_duck_count))
+		echo "[sus_path_duck]: susfs4ksu/boot-completed registered $sus_path_duck_count duck-variant path(s)" >> $logfile1
+	fi
+
 	# Add sus_path_loop paths (late v1.5.9+)
 	# to add paths: echo "/system/addon.d" >> /data/adb/susfs4ksu/sus_path_loop.txt
 	if [ -n "$version" ] && [ "$SUSFS_DECIMAL_MAIN" -ge 1 ] && [ "$SUSFS_DECIMAL_SUB" -ge 5 ] && [ "$SUSFS_DECIMAL_PATCH" -ge 9 ] || [ "$SUSFS_DECIMAL_MAIN" -ge 2 ] 2>/dev/null; then
