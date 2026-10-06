@@ -84,10 +84,6 @@ int main(int argc, char *argv[]) {
 		return set_sdcard_root_path(argc, argv);
 	if (!strcmp(argv[1], "set_android_data_root_path"))
 		return set_android_data_root_path(argc, argv);
-	/* sus_su is not supported by this KPM — return -1 so scripts
-	 * detect the failure and set sus_su=-1 in config.sh. */
-	if (!strcmp(argv[1], "sus_su"))
-		return -1;
 	print_help();
 	return -EINVAL;
 }
