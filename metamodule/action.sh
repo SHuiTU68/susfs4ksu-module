@@ -51,7 +51,15 @@ engine_ready() {
 	[ -f "$KPM_DIR/susfs_kpm.kpm" ] || return 1
 	[ -f "$KPM_DIR/disable" ] && return 1
 	[ -x "$MCTL" ] || return 1
-	"$MCTL" version >/dev/null 2>&1
+	"$MCTL" version >/dev/null 2>&1 || return 1
+	# E7 needs both halves of a mount (resolve + listing): see engine_up() in
+	# metamount.sh.  Without `readdir` a hot apply would create lookups whose
+	# files `ls` does not show, so the engine is treated as not ready and the
+	# caller is told to reboot into overlayfs instead.
+	case "$("$MCTL" caps 2>/dev/null | tr -d '\r' | head -n 1)" in
+	*readdir*) return 0 ;;
+	esac
+	return 1
 }
 
 active_modules() {
@@ -100,6 +108,12 @@ show_status() {
 		ver=$("$MCTL" version 2>/dev/null | head -1 | tr -d '\r')
 		echo "mctl     : ${ver:-no reply}"
 		if [ -n "$ver" ]; then
+			caps=$("$MCTL" caps 2>/dev/null | tr -d '\r' | head -n 1)
+			if [ -n "$caps" ]; then
+				echo "caps     : ${caps}"
+			else
+				echo "caps     : none advertised - E7 unusable, overlayfs in use"
+			fi
 			cnt=$("$MCTL" rule count 2>/dev/null | tr -d '\r\n')
 			echo "rules    : ${cnt:-unknown} dcache rule(s)"
 			"$MCTL" rule list 2>/dev/null | head -20

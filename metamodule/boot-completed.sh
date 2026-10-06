@@ -41,8 +41,18 @@ elif [ ! -f "$KPM_DIR/susfs_kpm.kpm" ]; then
 elif [ -f "$KPM_DIR/disable" ]; then
 	log "[state] engine disabled by $KPM_DIR/disable -> overlayfs fallback was used"
 elif [ -x "$MCTL" ]; then
+	caps=$("$MCTL" caps 2>/dev/null | tr -d '\r' | head -n 1)
 	rules=$("$MCTL" rule count 2>/dev/null | tr -d '\r\n')
-	log "[state] engine up, dcache rules=${rules:-unknown}"
+	log "[state] engine up, caps=${caps:-none} dcache rules=${rules:-unknown}"
+	# Two states are worth calling out here instead of letting them surface as
+	# "an app inside /system is missing" much later: an engine too old to answer
+	# (no caps, no rule query) means overlayfs did the mounting, and zero rules
+	# with a live engine means metamount.sh chose E7 and injected nothing.
+	if [ -z "$rules" ]; then
+		log "[state] engine did not answer the rule query -> overlayfs fallback was used"
+	elif [ "$rules" = "0" ]; then
+		log "[state] WARNING: engine up with 0 rules - nothing was injected"
+	fi
 else
 	log "[state] mctl missing -> overlayfs fallback was used"
 fi

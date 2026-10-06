@@ -76,6 +76,23 @@ jobs:
         env:
           NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
 
+      - name: Build mctl (metamodule userspace client)
+        run: |
+          # mctl is the userspace client for the engine's kcmp command channel.
+          # It has to be a binary: the channel is a *syscall*, and Android's
+          # toybox sh cannot issue one (there is no `syscall` builtin).  Static
+          # so it carries its own libc - the metamodule runs it from
+          # /data/adb/kpmmount/bin, outside anything the linker could load from.
+          NDKBIN="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          "${NDKBIN}/aarch64-linux-android26-clang" -static -O2 -Wall -Wextra \
+            -o tools/mctl tools/mctl.c
+          echo "=== mctl built ==="
+          file tools/mctl
+          "${NDKBIN}/llvm-strip" --strip-all tools/mctl || true
+          ls -l tools/mctl
+        env:
+          NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+
       - name: Update version with git HEAD
         run: |
           RANDOM_STRING=$(git rev-parse --short HEAD | cut -c1-7)
@@ -133,8 +150,10 @@ jobs:
           # metamodule works on an APatch install that never had susfs4ksu (its
           # customize.sh keeps an existing engine instead of downgrading one).
           cp susfs_kpm.kpm assemble-meta/susfs_kpm.kpm
-          # mctl is the userspace client for the engine's kcmp channel; build
-          # it here once it exists, so that its absence is explicit in the log.
+          # mctl is the userspace client for the engine's kcmp channel, built by
+          # the "Build mctl" step above.  If it ever stops being produced the
+          # metamodule silently degrades to script-only overlayfs, so say so
+          # loudly instead of shipping a zip that cannot use the engine.
           if [ -f tools/mctl ]; then
             cp tools/mctl assemble-meta/tools/mctl
             chmod 755 assemble-meta/tools/mctl

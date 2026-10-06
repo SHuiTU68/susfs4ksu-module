@@ -106,7 +106,8 @@ KPM_SRCS := \
     features/set_uname.c \
     features/set_cmdline.c \
     features/flags.c \
-    features/show.c
+    features/show.c \
+    features/mount_dcache.c
 
 KPM_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(KPM_SRCS))
 

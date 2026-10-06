@@ -148,6 +148,25 @@ unsigned long susfs_ksym(const char *name);
  * post-fs-data.sh by walking /proc/mounts. */
 #define CMD_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT 0x55563 /* KPM-only */
 
+/* KPM-only extension — the E7 dcache engine's rule ABI, implemented in
+ * features/mount_dcache.c.  These occupy 0x55565-0x5556a, i.e. the unused hole
+ * between AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT (0x55563) and ADD_SUS_KSTAT
+ * (0x55570), so they cannot collide with a stock susfs command: susfs_def.h
+ * assigns nothing in that range (0x55564 is unassigned, and its next value is
+ * 0x55570).  Stock susfs has no dcache engine, so there is nothing to mirror.
+ *
+ * The command is the same text protocol as everything else:
+ *   "55565|/system/bin/foo|/data/adb/modules/example/system/bin/foo"
+ * One rule per call.  A whole module set is 10^3-10^4 calls, which the client
+ * does inside a single process - measured cheaper than a binary bulk channel
+ * would be to build and to keep compatible. */
+#define CMD_SUSFS_KPM_DC_RULE_ADD    0x55565 /* path|virtual|real */
+#define CMD_SUSFS_KPM_DC_RULE_CLEAR  0x55566 /* no args */
+#define CMD_SUSFS_KPM_DC_RULE_COUNT  0x55567 /* returns the count as the rc */
+#define CMD_SUSFS_KPM_DC_RULE_LIST   0x55568 /* out_msg: "virtual=real\n"... */
+#define CMD_SUSFS_KPM_DC_CAPS        0x55569 /* out_msg: comma-separated caps */
+#define CMD_SUSFS_KPM_DC_STATUS      0x5556a /* out_msg: one status line */
+
 #define SUSFS_MAX_LEN_PATHNAME              256
 #define SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE 8192
 #define SUSFS_ENABLED_FEATURES_SIZE         8192
@@ -257,6 +276,35 @@ int susfs_get_log_enabled(void);
 int susfs_get_avc_log_spoofing(void);
 int susfs_avc_log_spoofing_init_hooks(void);
 void susfs_avc_log_spoofing_cleanup(void);
+
+/* ===== features/mount_dcache.c — the E7 dcache engine =====
+ *
+ * Advertised capabilities.  Userspace decides whether E7 may be used at all by
+ * reading this string (mctl caps), so a capability must only ever be listed
+ * once the code behind it is actually in the module:
+ *
+ *   rule-store   the rule table + the ABI above (always present)
+ *   dentry       synthetic dentry/inode pairs are installed, so lookups of a
+ *                rule's virtual path land on the module's file
+ *   readdir      directory listings include the synthetic entries, i.e. `ls`
+ *                agrees with `stat`.  metamount.sh requires THIS one before it
+ *                will choose E7: lookups that succeed while the listing does
+ *                not show the file is exactly the tell a root-hiding setup
+ *                cannot afford, and a half-built engine must never become the
+ *                default mount path.
+ *
+ * The string is what SUSFS_DC_CAPS_STRING expands to, and it is the single
+ * place to edit as the later slices land. */
+#define SUSFS_DC_CAPS_STRING "rule-store"
+
+int susfs_dc_rule_add(const char *virt, const char *real);
+int susfs_dc_rule_clear(void);
+int susfs_dc_rule_count(void);
+int susfs_dc_rule_list(char *out, int outlen);
+int susfs_dc_caps(char *out, int outlen);
+int susfs_dc_status(char *out, int outlen);
+int susfs_dc_init(void);
+void susfs_dc_cleanup(void);
 
 /* features/show.c */
 int susfs_show_version(char *out, int outlen);

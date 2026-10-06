@@ -21,6 +21,14 @@
 # something E7 v1 deliberately does not implement (whiteout / opaque replace):
 # silently dropping those would be worse than a weaker layer.
 #
+# "Unavailable" includes an engine that is loaded but not finished: E7 is gated
+# on the `readdir` capability it advertises (see engine_up()).  That is on
+# purpose - while the engine can resolve a path but not merge directory
+# listings, `stat /system/bin/foo` would succeed while `ls /system/bin` would
+# not show foo, and that mismatch is exactly the anomaly a root-hiding setup
+# must not have.  A half-built engine therefore falls back to overlayfs instead
+# of half-mounting the module set.
+#
 # Modes: boot (default; arms the bootloop guard) | hot (runtime refresh, no guard)
 # Second argument: "e4" forces real overlayfs (used by uninstall.sh's handover).
 # Companion scripts: action.sh (the APM Action button), boot-completed.sh
@@ -116,11 +124,33 @@ needs_e4() {
 	return 1
 }
 
-engine_up() {
+# The kcmp command channel answers: engine file present, not disabled, mctl
+# installed and getting a reply.  This says the engine is *reachable*, not that
+# it can do the job - see engine_up().
+channel_up() {
 	[ -f "$KPM_FILE" ] || return 1
 	[ -f "$KPM_DISABLE" ] && return 1
 	[ -x "$MCTL" ] || return 1
 	"$MCTL" version >/dev/null 2>&1
+}
+
+# Capabilities the engine advertises, comma-separated (empty on an engine that
+# predates the query).
+engine_caps() {
+	"$MCTL" caps 2>/dev/null | tr -d '\r' | head -n 1
+}
+
+# E7 is used only when the engine advertises `readdir`, i.e. when both halves of
+# a mount exist: the path resolves (dentry) *and* a directory listing shows it
+# (readdir).  Gating on everything-but-readdir would give lookups that succeed
+# while `ls` does not show the file - the one anomaly a root-hiding setup cannot
+# afford.  A half-built engine therefore falls back to overlayfs.
+engine_up() {
+	channel_up || return 1
+	case "$(engine_caps)" in
+	*readdir*) return 0 ;;
+	esac
+	return 1
 }
 
 # --- E7: hand the trees to the engine --------------------------------------
@@ -196,12 +226,14 @@ if [ -n "$FORCE_E4_ARG" ] || [ -n "${KPM_FORCE_E4:-}" ]; then
 elif engine_up && ! needs_e4; then
 	inject_e7
 else
-	if ! engine_up; then
+	if ! channel_up; then
 		why="unavailable"
 		[ -f "$KPM_FILE" ] || why="engine file missing ($KPM_FILE)"
 		[ -f "$KPM_DISABLE" ] && why="engine disabled by marker ($KPM_DISABLE)"
 		[ -x "$MCTL" ] || why="mctl missing ($MCTL)"
 		log "[e4] falling back: $why"
+	else
+		log "[e4] falling back: engine caps=[$(engine_caps)] and E7 needs readdir"
 	fi
 	mount_e4
 fi
