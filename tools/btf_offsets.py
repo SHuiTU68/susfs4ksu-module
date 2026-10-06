@@ -309,6 +309,55 @@ VFS_SIZES = [
     "vfsmount", "mount", "seq_file",
 ]
 
+# --------------------------------------------------------------------------
+# The field set the dcache-synthesis engine (kpm/features/mount_dcache.c
+# slice 2) needs.  Where --vfs describes hijacking *existing* objects, this
+# one describes *building new* ones: an inode has to be filled in the fields
+# new_inode_pseudo() leaves alone (i_sb/i_ino/i_mode/i_size/i_op/i_fop) and a
+# dentry linked in by hand, so both get the full set of fields the engine
+# reads or writes.  Kept separate from --vfs so the nomount report stays
+# byte-stable for the existing hooks.
+# --------------------------------------------------------------------------
+
+VFS2_FIELDS = [
+    # struct inode - what a synthetic file inode must be given
+    "inode.i_mode", "inode.i_opflags", "inode.i_uid", "inode.i_gid",
+    "inode.i_flags", "inode.i_op", "inode.i_sb", "inode.i_mapping",
+    "inode.i_ino", "inode.i_rdev", "inode.i_size", "inode.i_atime",
+    "inode.i_mtime", "inode.__i_ctime", "inode.i_bytes", "inode.i_blocks",
+    "inode.i_state", "inode.i_data", "inode.i_private",
+    # struct dentry - what a synthetic dentry must be linked with
+    "dentry.d_flags", "dentry.d_parent", "dentry.d_name",
+    "dentry.d_name.hash", "dentry.d_name.len", "dentry.d_name.name",
+    "dentry.d_inode", "dentry.d_iname", "dentry.d_lockref", "dentry.d_op",
+    "dentry.d_sb", "dentry.d_time", "dentry.d_fsdata",
+    "dentry.d_child", "dentry.d_subdirs",
+    # struct super_block - validating the target partition's sb
+    "super_block.s_dev", "super_block.s_type", "super_block.s_op",
+    "super_block.s_flags", "super_block.s_iflags", "super_block.s_magic",
+    "super_block.s_root", "super_block.s_fs_info",
+    # struct address_space - reached through inode->i_mapping
+    "address_space.host", "address_space.gfp_mask", "address_space.nrpages",
+    "address_space.a_ops",
+]
+
+VFS2_SLOTS = [
+    ("file_operations", ["llseek", "read", "write", "read_iter", "write_iter",
+                         "iterate_shared", "mmap", "open", "release", "fsync",
+                         "get_unmapped_area", "splice_read", "splice_write"]),
+    ("inode_operations", ["lookup", "get_link", "permission", "readlink",
+                          "getattr"]),
+    ("address_space_operations", ["writepage", "read_folio", "dirty_folio",
+                                  "readahead", "write_begin", "write_end",
+                                  "direct_IO"]),
+]
+
+VFS2_SIZES = [
+    "inode", "dentry", "super_block", "address_space",
+    "address_space_operations", "file_operations", "inode_operations",
+    "qstr", "file", "path",
+]
+
 
 def main():
     ap = argparse.ArgumentParser(
@@ -321,6 +370,8 @@ def main():
                     help="print sizeof(struct)")
     ap.add_argument("--vfs", action="store_true",
                     help="preset: fields + sizes for a nomount-style VFS hijack")
+    ap.add_argument("--vfs2", action="store_true",
+                    help="preset: fields + sizes for the dcache-synthesis engine")
     ap.add_argument("--emit-c", action="store_true",
                     help="emit C #defines instead of an aligned report")
     ap.add_argument("--kmi", default="",
@@ -344,6 +395,10 @@ def main():
         names += [("offset", f) for f in VFS_FIELDS]
         names += [("offset", "%s.%s" % (s, f)) for s, fs in VFS_SLOTS for f in fs]
         names += [("size", s) for s in VFS_SIZES]
+    if args.vfs2:
+        names += [("offset", f) for f in VFS2_FIELDS]
+        names += [("offset", "%s.%s" % (s, f)) for s, fs in VFS2_SLOTS for f in fs]
+        names += [("size", s) for s in VFS2_SIZES]
     names += [("offset", f) for f in args.fields]
     if args.size:
         names += [("size", s) for s in args.size]

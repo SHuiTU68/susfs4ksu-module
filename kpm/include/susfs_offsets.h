@@ -83,6 +83,124 @@
 #define KPM_OFF_SEQ_FROM                16
 #define KPM_OFF_SEQ_COUNT               24
 
+/* ===== struct offsets: slice 2 (dcache synthesis) =====
+ *
+ * Same source of truth as the block above - the device's own BTF
+ * (6.6.118-android15-8 GKI, aarch64).  Regenerate with:
+ *
+ *     python3 tools/btf_offsets.py --btf /sys/kernel/btf/vmlinux --vfs2
+ *     python3 tools/btf_offsets.py --btf ... --dump dentry   # whole struct
+ *
+ * Only the names not already defined above appear here, so the two blocks
+ * read as one offset table.  Everything is expressed as an offset rather
+ * than a struct because the KPM is a separately linked object: including
+ * the kernel's own definitions would mean guessing them, and a wrong guess
+ * here is a boot loop rather than a compile error.
+ *
+ * Reminder for the accessors below: `struct inode.i_count` is a refcount_t
+ * and `i_lock` a spinlock; build synthetic inodes through the VFS
+ * (new_inode_pseudo) so those are initialised correctly, and never
+ * hand-roll them.  The offsets are for *reading* the fields the VFS will
+ * not initialise for us (i_sb, i_ino, i_mode, i_size, i_op, i_fop, i_data).
+ */
+
+/* struct inode (KPM_SZ_INODE, 704 bytes) */
+#define KPM_OFF_INODE_I_MODE            0      /* umode_t   */
+#define KPM_OFF_INODE_I_OPFLAGS         2
+#define KPM_OFF_INODE_I_UID             4      /* kuid_t    */
+#define KPM_OFF_INODE_I_GID             8      /* kgid_t    */
+#define KPM_OFF_INODE_I_FLAGS           12
+#define KPM_OFF_INODE_I_OP              32
+#define KPM_OFF_INODE_I_RDEV            76     /* dev_t, inside the anon union at +72 */
+#define KPM_OFF_INODE_I_SIZE            80     /* loff_t    */
+#define KPM_OFF_INODE_I_ATIME           88     /* timespec64 */
+#define KPM_OFF_INODE_I_MTIME           104
+#define KPM_OFF_INODE_I_CTIME           120    /* __i_ctime */
+#define KPM_OFF_INODE_I_BYTES           140    /* unsigned short */
+#define KPM_OFF_INODE_I_BLK_BITS        142
+#define KPM_OFF_INODE_I_BLOCKS          144
+#define KPM_OFF_INODE_I_STATE           152    /* unsigned long */
+#define KPM_OFF_INODE_I_DATA            400    /* embedded struct address_space */
+
+/* struct dentry (KPM_SZ_DENTRY, 208 bytes) */
+#define KPM_OFF_DENTRY_D_FLAGS          0
+#define KPM_OFF_DENTRY_D_SEQ            4
+#define KPM_OFF_DENTRY_D_HASH           8      /* hlist_bl_node */
+#define KPM_OFF_DENTRY_D_PARENT         24
+#define KPM_OFF_DENTRY_D_NAME           32     /* struct qstr   */
+#define KPM_OFF_DENTRY_D_NAME_HASH      32
+#define KPM_OFF_DENTRY_D_NAME_LEN       36
+#define KPM_OFF_DENTRY_D_NAME_NAME      40
+#define KPM_OFF_DENTRY_D_INAME          56     /* short-name inline buffer */
+#define KPM_OFF_DENTRY_D_LOCKREF        88     /* struct lockref */
+#define KPM_OFF_DENTRY_D_LOCKREF_CNT    92
+#define KPM_OFF_DENTRY_D_OP             96
+#define KPM_OFF_DENTRY_D_SB             104
+#define KPM_OFF_DENTRY_D_TIME           112
+#define KPM_OFF_DENTRY_D_FSDATA         120
+#define KPM_OFF_DENTRY_D_CHILD          144    /* list_head */
+#define KPM_OFF_DENTRY_D_SUBDIRS        160    /* list_head */
+#define KPM_OFF_DENTRY_D_U              176    /* union { d_alias; d_rcu; d_ci; } */
+
+/* struct super_block (KPM_SZ_SUPER_BLOCK, 1536 bytes) */
+#define KPM_OFF_SB_S_TYPE               40
+#define KPM_OFF_SB_S_OP                 48
+#define KPM_OFF_SB_S_IFLAGS             88
+#define KPM_OFF_SB_S_MAGIC              96
+#define KPM_OFF_SB_S_FS_INFO            968
+
+/* struct address_space (KPM_SZ_ADDRESS_SPACE, 240 bytes), via inode->i_mapping */
+#define KPM_OFF_MAPPING_HOST            0
+#define KPM_OFF_MAPPING_GFP_MASK        88
+#define KPM_OFF_MAPPING_NRPAGES         112
+#define KPM_OFF_MAPPING_A_OPS           128
+
+/* struct file_operations (KPM_SZ_FILE_OPERATIONS, 264 bytes).  Note this
+ * 6.6 GKI vector has no .iterate, no .ioctl (only .unlocked_ioctl) and no
+ * .mmap_prepare - a shadow copy must be built against the fields that are
+ * really there. */
+#define KPM_OFF_FOP_LLSEEK              8
+#define KPM_OFF_FOP_READ                16
+#define KPM_OFF_FOP_WRITE               24
+#define KPM_OFF_FOP_READ_ITER           32
+#define KPM_OFF_FOP_WRITE_ITER          40
+#define KPM_OFF_FOP_ITERATE_SHARED      56
+#define KPM_OFF_FOP_MMAP                88
+#define KPM_OFF_FOP_OPEN                104
+#define KPM_OFF_FOP_RELEASE             120
+#define KPM_OFF_FOP_FSYNC               128
+#define KPM_OFF_FOP_GET_UNMAPPED        152
+#define KPM_OFF_FOP_SPLICE_WRITE        176
+#define KPM_OFF_FOP_SPLICE_READ         184
+
+/* struct inode_operations (KPM_SZ_INODE_OPERATIONS, 256 bytes) */
+#define KPM_OFF_IOP_LOOKUP              0
+#define KPM_OFF_IOP_GET_LINK            8
+#define KPM_OFF_IOP_PERMISSION          16
+#define KPM_OFF_IOP_READLINK            32
+#define KPM_OFF_IOP_GETATTR             112
+
+/* struct address_space_operations (KPM_SZ_ADDRESS_SPACE_OPS, 160 bytes) */
+#define KPM_OFF_AOPS_WRITEPAGE          0
+#define KPM_OFF_AOPS_READ_FOLIO         8
+#define KPM_OFF_AOPS_DIRTY_FOLIO        24
+#define KPM_OFF_AOPS_READAHEAD          32
+#define KPM_OFF_AOPS_WRITE_BEGIN        40
+#define KPM_OFF_AOPS_WRITE_END          48
+#define KPM_OFF_AOPS_DIRECT_IO          88
+
+/* sizeof() for the structs slice 2 allocates or copies */
+#define KPM_SZ_INODE                    704
+#define KPM_SZ_DENTRY                   208
+#define KPM_SZ_SUPER_BLOCK              1536
+#define KPM_SZ_ADDRESS_SPACE            240
+#define KPM_SZ_ADDRESS_SPACE_OPS        160
+#define KPM_SZ_FILE_OPERATIONS          264
+#define KPM_SZ_INODE_OPERATIONS         256
+#define KPM_SZ_QSTR                     16
+#define KPM_SZ_FILE                     264
+#define KPM_SZ_PATH                     16
+
 /* ===== raw accessors ===== */
 static inline void *kpm_rp(void *base, unsigned long off)
 {
