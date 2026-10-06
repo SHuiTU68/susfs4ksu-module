@@ -240,9 +240,22 @@ most likely to break something. A module that needs them falls back to E4.
 
 ### 4.4 Open items to check before P1 code
 
-1. Is `CONFIG_OVERLAY_FS` even present on this 6.6 MTK GKI? E4 is pointless if
-   not, and it also tells us why APatch removed overlay mounting. Needs a
-   `zcat /proc/config.gz | grep OVERLAY` or `/sys/module/overlay` on device.
+1. ~~Is `CONFIG_OVERLAY_FS` present?~~ **Answered, provisionally yes.** The
+   GKI common tree at `/tmp/aclk/common` (6.6.144, same `android15-6.6` family
+   as the device's 6.6.118) has `arch/arm64/configs/gki_defconfig:662:
+   CONFIG_OVERLAY_FS=y`, and it survives into that tree's built `.config`
+   together with `CONFIG_OVERLAY_FS_REDIRECT_ALWAYS_FOLLOW=y` and
+   `CONFIG_OVERLAY_FS_INDEX=n`. Same defconfig also has
+   `CONFIG_KALLSYMS_ALL=y` (line 50), which is what makes in-KPM
+   `symbol_lookup_name()` of non-exported text symbols work at all.
+   Caveat: this is a desktop-side tree, not the device. `/tmp/aclk/build` is
+   `6.6.144-4k-g9637ed13f1e9-dirty`, GCC-built with KASAN on and `LTO_NONE`,
+   so it is *not* the device kernel and only gki_defconfig transfers. The
+   device-side confirmation is one line in the engine's init:
+   `get_fs_type("overlay")` (and log `OVL_FS_SUPER_MAGIC`), or
+   `[ -e /sys/module/overlay ]` if we prefer to keep it out of the kernel.
+   Also note `OVERLAY_FS_INDEX` is off, so a module that uses
+   `redirect_dir`/`index` features will not behave like full overlayfs.
 2. `inode_operations` / `file_operations` / `dentry_operations` field offsets
    for 6.6 — extend `tools/btf_offsets.py --vfs` and re-run the 18-point
    self-check before trusting any new offset.
