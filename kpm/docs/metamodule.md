@@ -1,8 +1,12 @@
 # Our own metamodule: a KPM-backed mount system for stock APatch
 
-Status: design (verified against **official** `bmax121/APatch` `903e645`, and
-`bmax121/KernelPatch` @ `/root/kp_sync`). No code yet beyond the KPM we
-already ship.
+Status: **P0 landed** — the `kpmmount` metamodule package exists and works
+end to end on stock APatch (real overlayfs mounts + bootloop guard + the APM
+Action button), CI builds its zip. **P1 (the E7 dcache engine) is not started
+yet**: `metamount.sh` has the E7 branch wired to the `mctl` contract and falls
+back to E4 until that engine and client exist. Design verified against
+**official** `bmax121/APatch` `903e645` and `bmax121/KernelPatch` @
+`/root/kp_sync`.
 
 ## TL;DR
 
@@ -20,8 +24,15 @@ already ship.
   for listings). It is inherently invisible — `/proc/mounts` is untouched and
   `st_dev` comes from the real `/system` sb — for roughly half the cost of a
   full nomount port, because it needs no `i_op` shadow tables.
-* v1 ships without `metainstall.sh`, which keeps APatch's install path on its
-  default and keeps us out of `check_install_safety()`'s blocking branch.
+* The APM button is `action.sh`. APM already renders a play button for every
+  module whose directory contains one, metamodules included, so the button needs
+  **no app change at all** - the script *is* the button, and its output is the
+  on-screen log (see 4.4).
+* We do ship `metainstall.sh` (explicitly requested). That puts us into apd's
+  `check_install_safety()` branch: while the metamodule carries an
+  update/remove/disable marker, APatch refuses to install modules that need
+  mounting. Accepted deliberately - the price of being able to react to installs
+  at all (see 2 and 4.5).
 
 ## 1. Verified: stock APatch does not mount anything
 
@@ -65,9 +76,12 @@ Two consequences worth spelling out:
 2. Install-time gating (`check_install_safety()`) only engages when
    `metainstall.sh` exists: no `metainstall.sh` -> early `Ok(())` at
    `metamodule.rs:93-94`, and `get_install_script()` falls through to
-   `install_module_script` at `metamodule.rs:196-199`. Omitting
-   `metainstall.sh` in v1 therefore costs us nothing and removes a whole
-   failure mode (a "pending changes" metamodule state that blocks installs).
+   `install_module_script` at `metamodule.rs:196-199`. We ship
+   `metainstall.sh`, so we *are* in that branch: while the metamodule carries an
+   update/remove/disable marker, `Err(false)` blocks module installs with "reboot
+   first". That is the accepted cost of being notified about installs - and one
+   more reason why the bootloop guard must not use the metamodule's own `disable`
+   marker (4.1), because that marker would also block installs.
 
 Official boot order in `apd/src/event.rs::on_post_data_fs()`:
 
@@ -178,21 +192,45 @@ when the user list changes at runtime.
 ### 4.1 Artifacts
 
 ```
-kpm/                     engine, ships as the .kpm (extend susfs_kpm, or a 2nd KPM)
-kpm/features/mount_*.c   new feature files, one concern each
-metamodule/              the APatch-visible package (own zip, own id)
-metamodule/module.prop   id=<our id>, metamodule=1
-metamodule/metamount.sh  thin: ensure engine loaded, ask it to refresh
-metamodule/customize.sh  deploy <id>.kpm -> /data/adb/ap/kpm/<id>/<id>.kpm
-metamodule/post-fs-data.sh, service.sh, boot-completed.sh, uninstall.sh
-metamodule/bin/mctl     tiny static aarch64 client for the kcmp channel
-tools/                   btf_offsets.py (already there)
+metamodule/module.prop        id=kpmmount, name="KPM Mount", metamodule=1
+metamodule/customize.sh       deploy the engine (only if absent) + mctl; enable
+metamodule/metamount.sh       THE mount policy hook: E7 -> E4, guard logic
+metamodule/metainstall.sh     appended to every later module install (records)
+metamodule/metauninstall.sh   module-removal hook (records; no live unmount)
+metamodule/boot-completed.sh  disarms the guard, logs what the engine reached
+metamodule/action.sh          the APM Action button (see 4.4)
+metamodule/uninstall.sh       last act: hand the module set to real overlayfs
+kpm/                          engine, ships as the .kpm (extend susfs_kpm, or a 2nd KPM)
+kpm/features/mount_*.c        new feature files, one concern each
+tools/mctl                    static aarch64 client for the kcmp channel
+tools/btf_offsets.py          offset extraction (already there)
 ```
 
+Runtime layout, all under `/data/adb`:
+
+```
+kpmmount/enable                  mounting on (created by customize.sh)
+kpmmount/force_e4                always use real overlayfs instead of the engine
+kpmmount/disabled_boot           bootloop guard tripped; mounting suppressed
+kpmmount/.booting                armed at post-fs-data, cleared by boot-completed
+kpmmount/pending                 install/uninstall records from meta*.sh
+kpmmount/mount.log               every decision the scripts made
+kpmmount/rw/<part>/{upper,work}  E4 upperdir/workdir (on a tmpfs)
+kpmmount/bin/mctl                userspace client
+ap/kpm/susfs_kpm/susfs_kpm.kpm   the engine, in KernelPatch's autoload slot
+```
+
+Note what the guard does *not* do: it never drops `disable` inside
+`/data/adb/modules/kpmmount`. That marker would also put us into apd's
+`check_install_safety()` branch (refusing regular module installs) and would stop
+the metamodule's own `<stage>.sh` scripts from running - i.e. exactly the scripts
+that are the way out. `disabled_boot` plus the Action button's `rearm` give the
+same protection with neither side effect.
+
 `mctl` subcommands mirror nomount's `nm` so the two are interchangeable while
-we migrate: `mctl version`, `mctl rule list`, `mctl rule clear`, and
-`rule add [--whiteout]` reading NUL-separated `virtual\0target\0` pairs on
-stdin. One syscall per batch, not per path.
+we migrate: `mctl version`, `mctl rule count`, `mctl rule list`,
+`mctl rule clear`, and `rule add [--whiteout]` reading NUL-separated
+`virtual\0target\0` pairs on stdin. One syscall per batch, not per path.
 
 ### 4.2 Engine options
 
@@ -223,22 +261,46 @@ most likely to break something. A module that needs them falls back to E4.
 
 ### 4.3 Phases
 
-* **P0 — scaffold + E4 fallback (works end to end).** Metamodule package with
-  `module.prop` + `customize.sh` + `metamount.sh` that performs the mounts the
-  old APatch did (overlay per partition, upper on `modules.img`/tmpfs, done in
-  the global mount namespace), and the KPM loads from
-  `/data/adb/ap/kpm/<id>/<id>.kpm`. Goal: on stock APatch, modules mount again,
-  under our control, with no APatch patch. This is the safety net for P1.
+* **P0 — scaffold + E4 fallback (works end to end).** *Landed.* The metamodule
+  package (`metamodule/*`, id `kpmmount`) performs the mounts the old APatch did
+  (overlay per partition, E4), arms and disarms a bootloop guard, reports state
+  through `boot-completed.sh`, exposes the Action button, hands the module set to
+  overlayfs if it is uninstalled, and reacts to installs/removals through
+  `metainstall.sh`/`metauninstall.sh`. The KPM keeps loading from
+  `/data/adb/ap/kpm/susfs_kpm/susfs_kpm.kpm`, and `customize.sh` only installs it
+  when it is not already there, so the two packages never fight over it. CI now
+  builds a second zip (`kpmmount-<sha>.zip`). Goal: on stock APatch, modules mount
+  again, under our control, with no APatch patch. This is the safety net for P1.
 * **P1 — E7 engine in the KPM.** `ctl0` rule API + `mctl` client + `.kpm.event`
   hook on `post-fs-data/before` that scans `/data/adb/modules/*` on its own and
-  synthesizes the dcache. `metamount.sh` shrinks to "poke the engine, log".
+  synthesizes the dcache. `metamount.sh` then stops calling `mount` and simply
+  pokes the engine (its E7 branch already speaks the `mctl rule ...` contract
+  above, so nothing there has to change).
   `getdents64` hook merges listings for the touched directories only.
-* **P2 — close the gaps.** Whiteout/opaque, `boot-completed` cleanup, hot
-  add/remove without reboot, `statfs`/`s_ino` polish, and a bootloop guard
-  (`kpm/<id>/disable` is already honoured by the loader, so the guard is a
-  marker file written before applying and cleared on success).
+* **P2 — close the gaps.** Whiteout/opaque, hot add/remove without reboot,
+  `statfs`/`s_ino` polish, and tighter guard reporting.
 
-### 4.4 Open items to check before P1 code
+### 4.4 The APM button is `action.sh` (no app change needed)
+
+The requested "功能按钮 in APM" costs no APatch patch, because APM already has a
+generic one and it is driven by the module directory:
+
+| Step | Where |
+|---|---|
+| `"action"` flag = `action.sh` (or `<id>.lua` action) exists in the module dir, for *every* directory with a `module.prop` - metamodules included | `apd/src/module.rs::_list_modules()` (`path.join(action.sh).exists()`), `defs.rs:21` |
+| the Compose item draws a play button whenever that flag is set, with no metamodule filter | `app/.../ui/screen/APM.kt` (`if (module.hasActionScript) { ... FilledTonalButton ... }`) |
+| the list sorts enabled metamodules first, so our entry and its button are on top | `app/.../ui/viewmodel/APModuleViewModel.kt` (`compareByDescending { it.metamodule && it.enabled }`) |
+| tapping it opens `ExecuteAPMActionScreen`, which runs `apd module action kpmmount` and streams stdout+stderr into the on-screen log | `app/.../ui/screen/ExecuteAPMAction.kt` -> `util/APatchCli.kt::runAPModuleAction()` |
+| apd runs `/data/adb/modules/kpmmount/action.sh` with `AP_MODULE=kpmmount`, cwd = module dir | `apd/src/module.rs::run_action()` -> `exec_script()` |
+
+So the button *is* `metamodule/action.sh`: `status` (state / engine / KPM /
+mctl / rule count / guard), a hot `apply` that rebuilds the dcache rule set when
+the engine is up (and honestly says "reboot" when only E4 is available, because
+real mounts cannot be redone on a live `/system`), `rearm` for the bootloop
+guard, `enable`/`disable`, and an `e7`/`e4` preference switch. Everything it
+prints is the log the user reads in the app.
+
+### 4.5 Open items to check before P1 code
 
 1. ~~Is `CONFIG_OVERLAY_FS` present?~~ **Answered, provisionally yes.** The
    GKI common tree at `/tmp/aclk/common` (6.6.144, same `android15-6.6` family

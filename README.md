@@ -8,6 +8,42 @@
 This module installs a userspace helper tool called **ksu_susfs** and **sus_su** into /data/adb/ksu and provides a script to communicate with SUSFS kernel.
 This module provides root hiding for KernelSU on the kernel level.
 
+## APatch + KPM fork (this branch)
+
+This branch retargets the module at **stock APatch** with a self-written
+KernelPatch Module (KPM) that reimplements susfs, instead of KernelSU:
+
+- The userspace tool talks to *our* KPM over a `kcmp` magic channel
+  (`syscall(272, ...)`, no superkey), not to KernelSU's reboot-magic/`prctl`
+  interface. The upstream "universal binary" from
+  `sidex15/susfs4ksu-binaries` is **not** APatch-compatible; putting it at
+  `/data/adb/ap/bin/ksu_susfs` breaks the install, and `action.sh` repairs that
+  if it already happened.
+- Stock APatch (from the release that dropped its mount code) mounts modules
+  **only** through a *metamodule*: with none installed, the `system/` tree of
+  every module simply never appears. That is why this repo ships a second,
+  separate flashable package.
+
+## Companion package: `kpmmount` (metamodule)
+
+`metamodule/` is built into a second zip (`kpmmount-<sha>.zip`, id `kpmmount`,
+`metamodule=1`). Flash it like any module; APatch points
+`/data/adb/metamodule` at it and calls its `metamount.sh` at post-fs-data, where
+it owns the whole mount policy:
+
+- preferred engine: dcache injection by the KPM - nothing gets mounted, so
+  there is nothing to hide (`/proc/mounts` untouched, `st_dev` stays the real
+  partition's). **Not implemented yet.**
+- fallback engine (what runs today): the real per-partition overlayfs mounts
+  APatch used to do, in the global mount namespace;
+- a bootloop guard (`/data/adb/kpmmount/disabled_boot`, re-armed from the Action
+  button), a log at `/data/adb/kpmmount/mount.log`, and an **Action button in
+  APatch Manager** (the play icon on the `KPM Mount` entry) for status, hot
+  re-apply, re-arm, enable/disable and an E7/E4 preference switch.
+
+Design notes, evidence and the phase plan:
+[`kpm/docs/metamodule.md`](kpm/docs/metamodule.md).
+
 ## Notes
 - Make sure you have a custom kernel with SUSFS patched in it. Check the custom kernel source to see if it has SUSFS.
 - Make sure the kernel is using SUSFS 1.5.2 or later for effective hide.

@@ -117,6 +117,35 @@ jobs:
           cd ..
           ls -lh susfs4ap-kpm-*.zip
 
+      - name: Assemble metamodule zip
+        run: |
+          # The metamodule is a *separate* flashable package (id kpmmount):
+          # APatch and Magisk zip installers cannot nest, and the metamodule has
+          # to be installed as its own module so apd creates
+          # /data/adb/metamodule -> /data/adb/modules/kpmmount.
+          mkdir -p assemble-meta/tools
+          cp metamodule/module.prop metamodule/customize.sh metamodule/metamount.sh \
+             metamodule/metainstall.sh metamodule/metauninstall.sh \
+             metamodule/boot-completed.sh metamodule/action.sh metamodule/uninstall.sh \
+             assemble-meta/
+          chmod 755 assemble-meta/*.sh
+          # Ship the freshly built engine inside the metamodule zip too, so the
+          # metamodule works on an APatch install that never had susfs4ksu (its
+          # customize.sh keeps an existing engine instead of downgrading one).
+          cp susfs_kpm.kpm assemble-meta/susfs_kpm.kpm
+          # mctl is the userspace client for the engine's kcmp channel; build
+          # it here once it exists, so that its absence is explicit in the log.
+          if [ -f tools/mctl ]; then
+            cp tools/mctl assemble-meta/tools/mctl
+            chmod 755 assemble-meta/tools/mctl
+          else
+            echo "::warning::tools/mctl is missing - the metamodule will run script-only (E4 fallback)"
+          fi
+          cd assemble-meta
+          zip -r9 ../kpmmount-${{ env.BUILD_ID }}.zip .
+          cd ..
+          ls -lh kpmmount-*.zip
+
       - name: Upload KPM artifact
         uses: actions/upload-artifact@v4
         with:
@@ -128,6 +157,12 @@ jobs:
         with:
           name: susfs4ap-kpm-${{ env.BUILD_ID }}
           path: susfs4ap-kpm-*.zip
+
+      - name: Upload metamodule zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kpmmount-metamodule-${{ env.BUILD_ID }}
+          path: kpmmount-*.zip
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
